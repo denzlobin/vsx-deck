@@ -2,7 +2,7 @@
 //   Windows default output = VB-Cable -> capture "CABLE Output" -> VSX Deck Holder (wraps VSX) -> your interface
 // The Stream Deck switches rooms / ON-OFF / Bypass through files the plugin watches (see vsxdeckholder.c).
 // Usage: VSXDeck.exe [--tray]   (closing the window hides it to the tray; Exit from the tray menu)
-// Build: csc /target:winexe /platform:x64 /optimize /unsafe /r:System.Windows.Forms.dll /r:System.Drawing.dll vsxdeck.cs
+// Build: build.ps1
 using System;
 using System.Drawing;
 using System.IO;
@@ -15,7 +15,7 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.2.0.0")]
 
 static class Cfg
 {
@@ -25,7 +25,7 @@ static class Cfg
     public static readonly string AppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VSX Deck");
     public static readonly string Plugin = Path.Combine(AppDir, "VSX Deck Holder.dll");
     public static string Data(string name) { return Path.Combine(AppDir, name); }
-    // Output device: part of its name, from output.txt (written by the installer). Default: Volt 276.
+    // Output device: (part of) its name, from output.txt (installer / Settings). Default: Volt 276.
     public static string RenderName
     {
         get
@@ -33,6 +33,39 @@ static class Cfg
             try { var s = File.ReadAllText(Path.Combine(AppDir, "output.txt")).Trim(); if (s.Length > 0) return s; } catch (IOException) { }
             return "MONITOR L/R";
         }
+        set { File.WriteAllText(Path.Combine(AppDir, "output.txt"), value); }
+    }
+
+    // settings.ini: plain key=value lines (latency, pictures).
+    static string Ini { get { return Path.Combine(AppDir, "settings.ini"); } }
+    public static string Get(string key, string fallback)
+    {
+        try { foreach (var l in File.ReadAllLines(Ini)) if (l.StartsWith(key + "=")) return l.Substring(key.Length + 1).Trim(); }
+        catch (IOException) { }
+        return fallback;
+    }
+    public static void Set(string key, string value)
+    {
+        var lines = File.Exists(Ini) ? File.ReadAllLines(Ini).Where(l => !l.StartsWith(key + "=")).ToList() : new System.Collections.Generic.List<string>();
+        lines.Add(key + "=" + value);
+        File.WriteAllLines(Ini, lines);
+    }
+    public static readonly string[] LatencyNames = { "low", "normal", "safe" };
+    public static int LatencyMs { get { switch (Get("latency", "normal")) { case "low": return 10; case "safe": return 40; default: return 20; } } }
+    public static bool Pictures { get { return Get("pictures", "1") != "0"; } }
+
+    // Start at login = a shortcut in the user's Startup folder (the installer makes the same one).
+    public static string StartupLink { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "VSX Deck.lnk"); } }
+    public static void SetStartAtLogin(bool on)
+    {
+        if (!on) { File.Delete(StartupLink); return; }
+        var shellType = Type.GetTypeFromProgID("WScript.Shell");
+        object shell = Activator.CreateInstance(shellType);
+        object lnk = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { StartupLink });
+        var t = lnk.GetType();
+        t.InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, lnk, new object[] { Application.ExecutablePath });
+        t.InvokeMember("Arguments", System.Reflection.BindingFlags.SetProperty, null, lnk, new object[] { "--tray" });
+        t.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, lnk, null);
     }
 }
 
@@ -48,7 +81,7 @@ sealed class Vst : IDisposable
 
     readonly IntPtr eff; readonly Dispatch dispatch; readonly ProcessRep process;
     readonly HostCb keep;          // keeps the callback alive while the plugin holds it
-    readonly float rate;
+    float rate;
     public Action<int, int> SizeWindow;
 
     public Vst(string path, float rate)
@@ -87,6 +120,14 @@ sealed class Vst : IDisposable
     }
 
     public void Process(IntPtr inputs, IntPtr outputs, int n) { process(eff, inputs, outputs, n); }
+    public void SetRate(float newRate)   // new output device: same VSX instance, new sample rate
+    {
+        if (newRate == rate) return;
+        rate = newRate;
+        Call(72); Call(12, 0, IntPtr.Zero);          // stop process, mains off
+        Call(10, 0, IntPtr.Zero, IntPtr.Zero, rate);
+        Call(12, 0, (IntPtr)1); Call(71);            // mains on, start process
+    }
     public Size EditorSize()
     {
         IntPtr pp = Marshal.AllocHGlobal(8);
@@ -141,7 +182,8 @@ interface IAudioRenderClient { [PreserveSig] int GetBuffer(uint frames, out IntP
 
 static class Wasapi
 {
-    public static IAudioClient Open(int flow, string nameContains, out string fullName)
+    // Active devices of a flow (0 = playback, 1 = recording) with their friendly names.
+    static System.Collections.Generic.IEnumerable<Tuple<string, IMMDevice>> Devices(int flow)
     {
         var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
         IMMDeviceCollection col; en.EnumAudioEndpoints(flow, 1 /*ACTIVE*/, out col);
@@ -152,10 +194,17 @@ static class Wasapi
             IMMDevice d; col.Item(i, out d);
             IPropertyStore ps; d.OpenPropertyStore(0, out ps);
             PropVariant v; ps.GetValue(ref key, out v);
-            string name = v.vt == 31 ? Marshal.PtrToStringUni(v.p) : "";
-            if (name.IndexOf(nameContains, StringComparison.OrdinalIgnoreCase) < 0) continue;
-            fullName = name;
-            Guid iid = typeof(IAudioClient).GUID; object o; d.Activate(ref iid, 23 /*CLSCTX_ALL*/, IntPtr.Zero, out o);
+            yield return Tuple.Create(v.vt == 31 ? Marshal.PtrToStringUni(v.p) : "", d);
+        }
+    }
+    public static string[] Names(int flow) { return Devices(flow).Select(t => t.Item1).ToArray(); }
+    public static IAudioClient Open(int flow, string nameContains, out string fullName)
+    {
+        foreach (var t in Devices(flow))
+        {
+            if (t.Item1.IndexOf(nameContains, StringComparison.OrdinalIgnoreCase) < 0) continue;
+            fullName = t.Item1;
+            Guid iid = typeof(IAudioClient).GUID; object o; t.Item2.Activate(ref iid, 23 /*CLSCTX_ALL*/, IntPtr.Zero, out o);
             return (IAudioClient)o;
         }
         throw new Exception((flow == 0 ? "playback" : "recording") + " device containing '" + nameContains + "' not found");
@@ -163,15 +212,21 @@ static class Wasapi
 }
 
 // ---------------------------------------------------------------- audio engine
+// Audio connection: capture -> VSX -> output. Restarted for new settings; the VSX instance outlives it.
 sealed class Engine : IDisposable
 {
+    [DllImport("avrt.dll", CharSet = CharSet.Unicode)] static extern IntPtr AvSetMmThreadCharacteristics(string task, ref int index);
     readonly Vst vst; readonly IAudioClient cap, ren; readonly IAudioCaptureClient capC; readonly IAudioRenderClient renC;
-    readonly int rate, capCh, renCh; readonly uint renSize;
+    readonly int rate, capCh, renCh, target; readonly uint renSize;
     readonly Thread thread; volatile bool run = true;
     public readonly string Info;
     public string Error;
+    // Glitch counters, shown in the header: output ran dry with audio waiting (late) or with none (cable gap),
+    // VB-Cable reported a discontinuity, or a backlog was trimmed (resync).
+    public int Late, CableGap, Discontinuity, Resync;
+    public int Glitches { get { return Late + CableGap + Discontinuity + Resync; } }
 
-    public Engine()
+    public Engine(Func<int, Vst> vstFor)
     {
         string capName, renName;
         cap = Wasapi.Open(1, Cfg.CaptureName, out capName);
@@ -181,14 +236,16 @@ sealed class Engine : IDisposable
         int renRate = Marshal.ReadInt32(rf, 4);
         // ponytail: no resampler; both devices must share a rate (set VB-Cable to the interface's rate in Sound settings).
         if (renRate != rate) throw new Exception(string.Format("sample rates differ: {0} {1} Hz vs {2} {3} Hz", capName, rate, renName, renRate));
-        Check(cap.Initialize(0, 0, 200000, 0, cf, IntPtr.Zero), "capture init");   // 20 ms buffers, mix format = float32
-        Check(ren.Initialize(0, 0, 300000, 0, rf, IntPtr.Zero), "render init");
+        int ms = Cfg.LatencyMs;
+        target = rate * ms / 1000;                                                   // audio kept queued at the output
+        Check(cap.Initialize(0, 0, 200000, 0, cf, IntPtr.Zero), "capture init");     // 20 ms, mix format = float32
+        Check(ren.Initialize(0, 0, (2 * ms + 10) * 10000L, 0, rf, IntPtr.Zero), "render init");
         ren.GetBufferSize(out renSize);
         Guid ic = typeof(IAudioCaptureClient).GUID, ir = typeof(IAudioRenderClient).GUID; object o;
         cap.GetService(ref ic, out o); capC = (IAudioCaptureClient)o;
         ren.GetService(ref ir, out o); renC = (IAudioRenderClient)o;
-        vst = new Vst(Cfg.Plugin, rate);   // on the UI thread: VSX's window and state calls belong to it
-        Info = string.Format("{0}  →  VSX  →  {1}   ({2} Hz)", capName, renName, rate);
+        vst = vstFor(rate);   // on the UI thread: VSX's window and state calls belong to it
+        Info = string.Format("{0}   →   VSX   →   {1}   ·   {2:0.#} kHz   ·   {3} ms", capName, renName, rate / 1000.0, ms);
         thread = new Thread(Loop) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "audio" };
         thread.Start();
     }
@@ -198,6 +255,7 @@ sealed class Engine : IDisposable
     {
         try
         {
+            int task = 0; AvSetMmThreadCharacteristics("Pro Audio", ref task);   // Windows' audio scheduling class
             const int B = Cfg.Block;
             var fifo = new float[rate * 2 * 2]; int fifoN = 0;             // interleaved stereo, up to 1 s
             IntPtr inL = Marshal.AllocHGlobal(B * 4), inR = Marshal.AllocHGlobal(B * 4), outL = Marshal.AllocHGlobal(B * 4), outR = Marshal.AllocHGlobal(B * 4);
@@ -205,17 +263,18 @@ sealed class Engine : IDisposable
             Marshal.WriteIntPtr(ins, 0, inL); Marshal.WriteIntPtr(ins, 8, inR); Marshal.WriteIntPtr(outs, 0, outL); Marshal.WriteIntPtr(outs, 8, outR);
             var l = new float[B]; var r = new float[B];
             cap.Start(); ren.Start();
-            int target = rate / 100 * 2;                                       // keep ~20 ms queued at the output
+            bool playing = false; uint lastPad = 0;
             while (run)
             {
-                Thread.Sleep(2);
+                Thread.Sleep(1);                                               // ~1 ms with timeBeginPeriod(1), see Program
                 uint pk; capC.GetNextPacketSize(out pk);
                 while (pk > 0)
                 {
                     IntPtr data; uint fr, fl; long p1, p2;
                     capC.GetBuffer(out data, out fr, out fl, out p1, out p2);
+                    if ((fl & 1) != 0 && playing) Discontinuity++;             // DATA_DISCONTINUITY
                     int need = (int)fr * 2;
-                    if (fifoN + need > fifo.Length) fifoN = 0;                 // ponytail: overflow (clock drift) -> drop backlog
+                    if (fifoN + need > fifo.Length) { fifoN = 0; Resync++; }   // ponytail: overflow -> drop backlog
                     if ((fl & 2) != 0) Array.Clear(fifo, fifoN, need);         // SILENT flag
                     else for (int i = 0; i < fr; i++)
                     {
@@ -227,6 +286,7 @@ sealed class Engine : IDisposable
                     capC.GetNextPacketSize(out pk);
                 }
                 uint pad; ren.GetCurrentPadding(out pad);
+                if (playing && pad == 0 && lastPad > 0) { if (fifoN >= B * 2) Late++; else CableGap++; }
                 while (fifoN >= B * 2 && pad + B <= renSize && pad < target + B)
                 {
                     for (int i = 0; i < B; i++) { l[i] = fifo[i * 2]; r[i] = fifo[i * 2 + 1]; }
@@ -237,9 +297,14 @@ sealed class Engine : IDisposable
                     IntPtr buf; renC.GetBuffer((uint)B, out buf);
                     for (int i = 0; i < B; i++) for (int c = 0; c < renCh; c++) WriteF(buf, i * renCh + c, c == 0 ? l[i] : c == 1 ? r[i] : 0f);
                     renC.ReleaseBuffer((uint)B, 0);
-                    pad += B;
+                    pad += B; playing = true;
                 }
-                if (fifoN > rate / 5 * 2) fifoN = 0;                           // ponytail: >200 ms backlog (drift) -> resync
+                lastPad = pad;
+                if (fifoN > rate / 5 * 2)                                      // >200 ms backlog (clock drift): keep the newest
+                {
+                    int keep = target * 2;
+                    Buffer.BlockCopy(fifo, (fifoN - keep) * 4, fifo, 0, keep * 4); fifoN = keep; Resync++;
+                }
             }
             ren.Stop(); cap.Stop();
         }
@@ -248,8 +313,7 @@ sealed class Engine : IDisposable
     static unsafe float ReadF(IntPtr p, int i) { return ((float*)p)[i]; }
     static unsafe void WriteF(IntPtr p, int i, float v) { ((float*)p)[i] = v; }
 
-    public Vst Plugin { get { return vst; } }
-    public void Dispose() { run = false; thread.Join(1000); vst.Dispose(); }
+    public void Dispose() { run = false; thread.Join(1000); cap.Stop(); ren.Stop(); Marshal.ReleaseComObject(cap); Marshal.ReleaseComObject(ren); }
 }
 
 // ---------------------------------------------------------------- window, tray, deck key pictures
@@ -257,8 +321,23 @@ sealed class MainForm : Form
 {
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr h, IntPtr hdc, int flags);
 
-    readonly Engine engine; readonly Panel editor = new Panel(); readonly NotifyIcon tray = new NotifyIcon();
-    readonly Label info = new Label { Dock = DockStyle.Top, Height = 22, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(6, 0, 0, 0) };
+    Vst vst; Engine engine; readonly Panel editor = new Panel(); readonly NotifyIcon tray = new NotifyIcon();
+    // Header strip in the app's charcoal palette: the audio route, muted, and a Settings button.
+    public static readonly Color Charcoal = Color.FromArgb(0x17, 0x18, 0x1c), Muted = Color.FromArgb(0xa7, 0xa8, 0xae),
+        Key = Color.FromArgb(0x2b, 0x2c, 0x31), Light = Color.FromArgb(0xec, 0xea, 0xe6), Warn = Color.FromArgb(0xff, 0x8a, 0x7a);
+    readonly Panel header = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = Charcoal };
+    readonly Label info = new Label
+    {
+        Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0),
+        ForeColor = Muted, Font = new Font("Segoe UI", 9f), AutoEllipsis = true
+    };
+    readonly Button gear = new Button
+    {
+        Dock = DockStyle.Right, Width = 40, Text = "", Font = new Font("Segoe MDL2 Assets", 11f),
+        FlatStyle = FlatStyle.Flat, ForeColor = Muted, Cursor = Cursors.Hand, TabStop = false
+    };
+    string infoText = ""; int shownGlitches;
+    SettingsForm settings;
     readonly System.Windows.Forms.Timer idle = new System.Windows.Forms.Timer { Interval = 30 };
     bool exiting;
     DateTime seenStatus; bool watching;
@@ -268,18 +347,25 @@ sealed class MainForm : Form
     {
         Text = "VSX Deck"; FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false;
         Icon = AppIcon(SystemInformation.IconSize);
+        Font = new Font("Segoe UI", 9f); BackColor = Charcoal;
+        HandleCreated += (s, e) => { int on = 1; DwmSetWindowAttribute(Handle, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, ref on, 4); };
         editor.Dock = DockStyle.Fill;
-        Controls.Add(editor); Controls.Add(info);
-        engine = new Engine();
-        info.Text = engine.Info;
-        var size = engine.Plugin.EditorSize();
-        ClientSize = new Size(size.Width, size.Height + info.Height);
-        engine.Plugin.SizeWindow = (w, h) => BeginInvoke((Action)(() => ClientSize = new Size(w, h + info.Height)));
-        HandleCreated += (s, e) => engine.Plugin.EditorOpen(editor.Handle);
+        gear.FlatAppearance.BorderSize = 0; gear.FlatAppearance.MouseOverBackColor = Key;
+        gear.Click += (s, e) => OpenSettings();
+        new ToolTip().SetToolTip(gear, "Settings");
+        header.Controls.Add(info); header.Controls.Add(gear);
+        Controls.Add(editor); Controls.Add(header);
+        engine = new Engine(VstFor);
+        SetInfo(engine.Info, false);
+        var size = vst.EditorSize();
+        ClientSize = new Size(size.Width, size.Height + header.Height);
+        vst.SizeWindow = (w, h) => BeginInvoke((Action)(() => ClientSize = new Size(w, h + header.Height)));
+        HandleCreated += (s, e) => vst.EditorOpen(editor.Handle);
         idle.Tick += (s, e) =>
         {
-            engine.Plugin.EditorIdle();
-            if (engine.Error != null) { info.Text = "Audio stopped: " + engine.Error; info.ForeColor = Color.Firebrick; }
+            vst.EditorIdle();
+            if (engine != null && engine.Error != null) { SetInfo("Audio stopped: " + engine.Error, true); engine.Dispose(); engine = null; }
+            ShowGlitches();
             WatchStatus();
             CaptureSlotPictureWhenDue();
         };
@@ -288,10 +374,35 @@ sealed class MainForm : Form
         tray.Icon = AppIcon(SystemInformation.SmallIconSize); tray.Text = "VSX Deck"; tray.Visible = true;
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("Show VSX", null, (s, e) => ShowWindow());
+        tray.ContextMenuStrip.Items.Add("Settings…", null, (s, e) => OpenSettings());
         tray.ContextMenuStrip.Items.Add("Exit", null, (s, e) => { exiting = true; Close(); });
         tray.DoubleClick += (s, e) => ShowWindow();
         if (startHidden) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; Load += (s, e) => Hide(); }
         HandleCreated += (s, e) => ListenForShow();   // BeginInvoke needs the window handle
+    }
+    // One VSX instance for the app's lifetime: a new audio connection only re-rates it (no reload, no burst).
+    Vst VstFor(int rate) { if (vst == null) vst = new Vst(Cfg.Plugin, rate); else vst.SetRate(rate); return vst; }
+    public void RestartAudio()
+    {
+        if (engine != null) engine.Dispose();
+        engine = null; shownGlitches = -1;
+        try { engine = new Engine(VstFor); SetInfo(engine.Info, false); }
+        catch (Exception ex) { SetInfo("Audio stopped: " + ex.Message, true); }
+    }
+    void SetInfo(string text, bool error) { infoText = text; info.Text = text; info.ForeColor = error ? Warn : Muted; }
+    void ShowGlitches()   // crackle check: dropouts since the audio connection started
+    {
+        if (engine == null || engine.Glitches == shownGlitches) return;
+        shownGlitches = engine.Glitches;
+        if (shownGlitches == 0) { info.Text = infoText; return; }
+        info.Text = string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches);
+        Program.Log(string.Format("dropouts: late {0}, cable gap {1}, cable discontinuity {2}, resync {3}", engine.Late, engine.CableGap, engine.Discontinuity, engine.Resync));
+    }
+    void OpenSettings()
+    {
+        if (settings != null) { settings.Activate(); return; }
+        using (settings = new SettingsForm(this)) settings.ShowDialog();
+        settings = null;
     }
     void ShowWindow()
     {
@@ -312,6 +423,7 @@ sealed class MainForm : Form
         showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEvent);
         ThreadPool.RegisterWaitForSingleObject(showEvent, (s, timedOut) => BeginInvoke((Action)ShowWindow), null, -1, false);
     }
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int value, int size);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint from, uint to, bool attach);
@@ -325,7 +437,7 @@ sealed class MainForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; } // keep running in the tray
-        idle.Stop(); engine.Plugin.EditorClose(); engine.Dispose(); tray.Visible = false;
+        idle.Stop(); vst.EditorClose(); if (engine != null) engine.Dispose(); vst.Dispose(); tray.Visible = false;
         base.OnFormClosing(e);
     }
 
@@ -345,6 +457,7 @@ sealed class MainForm : Form
     {
         if (captureAt == -1 || Environment.TickCount - captureAt < 0) return;
         captureAt = -1;
+        if (!Cfg.Pictures) return;
         try
         {
             if (!Visible || WindowState == FormWindowState.Minimized) return;
@@ -405,11 +518,160 @@ sealed class MainForm : Form
     }
 }
 
+// ---------------------------------------------------------------- settings
+sealed class SettingsForm : Form
+{
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int value, int size);
+    static readonly System.Text.RegularExpressions.Regex PresetName = new System.Text.RegularExpressions.Regex(@"^slot\d+\.vsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    const int W = 420;
+    int y = 16;
+
+    public SettingsForm(MainForm main)
+    {
+        Text = "VSX Deck Settings"; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false; Icon = main.Icon;
+        BackColor = MainForm.Charcoal; ForeColor = MainForm.Light; Font = new Font("Segoe UI", 9.75f);
+        HandleCreated += (s, e) => { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, 4); };
+
+        Heading("Audio");
+        string[] outputs = Wasapi.Names(0).Where(n => n.IndexOf("VB-Audio", StringComparison.OrdinalIgnoreCase) < 0).ToArray();
+        var output = Combo(outputs);
+        output.SelectedIndex = Array.FindIndex(outputs, n => n.IndexOf(Cfg.RenderName, StringComparison.OrdinalIgnoreCase) >= 0);
+        output.SelectedIndexChanged += (s, e) => { Cfg.RenderName = (string)output.SelectedItem; main.RestartAudio(); };
+        Row("Output", output);
+        var latency = Combo(new[] { "Low (10 ms)", "Normal (20 ms)", "Safe (40 ms)" });
+        latency.SelectedIndex = Math.Max(0, Array.IndexOf(Cfg.LatencyNames, Cfg.Get("latency", "normal")));
+        latency.SelectedIndexChanged += (s, e) => { Cfg.Set("latency", Cfg.LatencyNames[latency.SelectedIndex]); main.RestartAudio(); };
+        Row("Latency", latency);
+        Note("More latency = more cushion against crackles and dropouts.");
+
+        Heading("General");
+        var login = Check("Start VSX Deck at login (in the tray)", File.Exists(Cfg.StartupLink));
+        login.CheckedChanged += (s, e) => Cfg.SetStartAtLogin(login.Checked);
+
+        Heading("Stream Deck keys");
+        var pictures = Check("Room pictures on preset keys", Cfg.Pictures);
+        pictures.CheckedChanged += (s, e) => { Cfg.Set("pictures", pictures.Checked ? "1" : "0"); if (!pictures.Checked) DeletePictures(); };
+        Buttons(Btn("Redraw pictures", (s, e) => DeletePictures()));
+        Note("Pictures are taken again as you select presets with the VSX window open.");
+
+        Heading("Presets");
+        Buttons(Btn("Back up…", (s, e) => Backup()), Btn("Restore…", (s, e) => Restore()),
+                Btn("Open folder", (s, e) => System.Diagnostics.Process.Start("explorer.exe", "\"" + Cfg.AppDir + "\"")));
+
+        y += 12;
+        var close = Btn("Close", (s, e) => Close());
+        close.Location = new Point(W - 16 - close.PreferredSize.Width, y);
+        Controls.Add(close); CancelButton = close;
+        ClientSize = new Size(W, y + close.Height + 16);
+    }
+
+    // ---- layout: one column, top to bottom
+    void Heading(string text)
+    {
+        if (y > 16) y += 10;
+        Controls.Add(new Label { Text = text.ToUpperInvariant(), Location = new Point(16, y), AutoSize = true, ForeColor = MainForm.Muted, Font = new Font("Segoe UI Semibold", 8.25f) });
+        y += 24;
+    }
+    void Row(string label, Control c)
+    {
+        Controls.Add(new Label { Text = label, Location = new Point(16, y + 4), AutoSize = true });
+        c.Location = new Point(96, y); c.Width = W - 96 - 16; Controls.Add(c); y += c.Height + 8;
+    }
+    void Note(string text)
+    {
+        Controls.Add(new Label { Text = text, Location = new Point(16, y), Size = new Size(W - 32, 18), ForeColor = MainForm.Muted, Font = new Font("Segoe UI", 8.25f) });
+        y += 22;
+    }
+    void Buttons(params Button[] buttons)
+    {
+        int x = 16;
+        foreach (var b in buttons) { b.Location = new Point(x, y); Controls.Add(b); x += b.PreferredSize.Width + 8; }
+        y += buttons[0].Height + 8;
+    }
+    static ComboBox Combo(string[] items)
+    {
+        var c = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, BackColor = MainForm.Key, ForeColor = MainForm.Light };
+        c.Items.AddRange(items); return c;
+    }
+    CheckBox Check(string text, bool on)
+    {
+        var c = new CheckBox { Text = text, Checked = on, Location = new Point(16, y), AutoSize = true };
+        Controls.Add(c); y += 28; return c;
+    }
+    static Button Btn(string text, EventHandler click)
+    {
+        var b = new Button { Text = text, AutoSize = true, Height = 30, Padding = new Padding(8, 0, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = MainForm.Key, Cursor = Cursors.Hand };
+        b.FlatAppearance.BorderColor = Color.FromArgb(0x3d, 0x40, 0x49); b.Click += click; return b;
+    }
+
+    // ---- actions
+    static void DeletePictures() { foreach (var f in Directory.GetFiles(Cfg.AppDir, "slot*.png")) File.Delete(f); }
+
+    void Backup()
+    {
+        var presets = Directory.GetFiles(Cfg.AppDir, "slot*.vsx").Where(f => PresetName.IsMatch(Path.GetFileName(f))).ToArray();
+        if (presets.Length == 0) { MessageBox.Show(this, "No presets saved yet.", Text); return; }
+        using (var d = new SaveFileDialog { Filter = "VSX Deck presets (*.zip)|*.zip", FileName = "VSX Deck presets " + DateTime.Now.ToString("yyyy-MM-dd") + ".zip" })
+        {
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            using (var fs = new FileStream(d.FileName, FileMode.Create))
+            using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
+                foreach (var f in presets)
+                {
+                    var bytes = File.ReadAllBytes(f);
+                    using (var e = zip.CreateEntry(Path.GetFileName(f)).Open()) e.Write(bytes, 0, bytes.Length);
+                }
+            MessageBox.Show(this, presets.Length + " presets backed up.", Text);
+        }
+    }
+
+    // Takes only slotN.vsx entries that look like VSX state (1 MB cap, "VC2!" header). Presets it replaces move to
+    // cleared\ like a held key does, so a restore can be undone.
+    void Restore()
+    {
+        var found = new System.Collections.Generic.Dictionary<string, byte[]>();
+        using (var d = new OpenFileDialog { Filter = "VSX Deck presets (*.zip)|*.zip" })
+        {
+            if (d.ShowDialog(this) != DialogResult.OK) return;
+            try
+            {
+                using (var fs = File.OpenRead(d.FileName))
+                using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Read))
+                    foreach (var e in zip.Entries)
+                    {
+                        if (!PresetName.IsMatch(e.FullName) || e.Length < 8 || e.Length > 1 << 20) continue;
+                        var bytes = new byte[e.Length]; int n = 0;   // never read past the declared size
+                        using (var st = e.Open()) for (int k; n < bytes.Length && (k = st.Read(bytes, n, bytes.Length - n)) > 0; ) n += k;
+                        if (n == bytes.Length &&System.Text.Encoding.ASCII.GetString(bytes, 0, 4) == "VC2!") found[e.FullName.ToLowerInvariant()] = bytes;
+                    }
+            }
+            catch (InvalidDataException) { }
+        }
+        if (found.Count == 0) { MessageBox.Show(this, "No VSX Deck presets in that file.", Text); return; }
+        int replaced = found.Keys.Count(n => File.Exists(Cfg.Data(n)));
+        string ask = found.Count + " presets to restore." + (replaced > 0 ? "\n" + replaced + " current presets with the same numbers move to the cleared folder." : "");
+        if (MessageBox.Show(this, ask, Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        string cleared = Cfg.Data("cleared"), stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+        Directory.CreateDirectory(cleared);
+        foreach (var kv in found)
+        {
+            string path = Cfg.Data(kv.Key), slot = Path.GetFileNameWithoutExtension(kv.Key);
+            if (File.Exists(path)) File.Move(path, Path.Combine(cleared, slot + "-" + stamp + ".vsx"));
+            File.WriteAllBytes(path + ".tmp", kv.Value); File.Move(path + ".tmp", path);
+            File.Delete(Cfg.Data(slot + ".png")); File.Delete(Cfg.Data(slot + "-active.png"));
+        }
+        MessageBox.Show(this, found.Count + " presets restored. Press a preset key to load one.", Text);
+    }
+}
+
 static class Program
 {
     [STAThread]
+    [DllImport("winmm.dll")] static extern int timeBeginPeriod(int ms);
     static void Main(string[] args)
     {
+        timeBeginPeriod(1);   // 1 ms sleeps for the audio loop (Windows 11 default is ~15.6 ms: too coarse, crackles)
         bool created, tray = Array.IndexOf(args, "--tray") >= 0;
         using (new Mutex(true, "VSXDeck.single", out created))
         {
@@ -420,6 +682,9 @@ static class Program
                 return;
             }
             Application.EnableVisualStyles();
+            if (System.Diagnostics.Process.GetProcessesByName("VSXSystemwide").Length > 0 &&
+                MessageBox.Show("VSX Systemwide is running. With both, system audio may go through VSX twice.\n\nQuit VSX Systemwide first (its tray icon), or start VSX Deck anyway?",
+                    "VSX Deck", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
             // Started at login, devices or files may not be ready yet: retry quietly for ~30 s before complaining.
             for (int attempt = 1; ; attempt++)
             {
@@ -434,7 +699,7 @@ static class Program
         }
     }
     [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);   // -1 = any
-    static void Log(string line)
+    public static void Log(string line)
     {
         try { File.AppendAllText(Path.Combine(Cfg.AppDir, "vsxdeck.log"), DateTime.Now.ToString("s") + "  " + line + Environment.NewLine); }
         catch (IOException) { }

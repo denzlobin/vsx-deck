@@ -49,8 +49,17 @@ and starts empty, ready for Save.
 - **ON** returns to the last preset used (preset 1 if that one is empty). OFF is a 30 ms fade to dry; VSX keeps running.
 - **Bypass** stays on across room switches and is never saved into a preset.
 - **Amber dashed outline** on ON/OFF or Bypass = not confirmed by a running VSX (the VSX Deck app isn't running).
-- **Tray icon**: Show VSX / Exit. Closing the window only hides it.
+- **Tray icon**: Show VSX / Settings… / Exit. Closing the window only hides it.
 - Latency of the system-audio path: roughly 20–40 ms. Fine for music and video, noticeable in games.
+- **Dropouts** in the header (e.g. "dropouts 3") count moments the output ran dry since the audio connection
+  started; details go to `vsxdeck.log`. If you hear crackles and the number climbs, raise **Latency** in Settings.
+
+### Settings (gear in the header, or tray → Settings…)
+
+- **Output** device and **Latency** (10 / 20 / 40 ms). Changing either reconnects the audio; VSX stays loaded.
+- **Start at login** (in the tray).
+- **Room pictures on preset keys** on/off, and **Redraw pictures**.
+- **Presets**: back up to a .zip, restore from one (replaced presets move to `cleared\`), open the presets folder.
 
 ### Room pictures on preset keys
 
@@ -70,7 +79,7 @@ generated files.
 | `make-icons.ps1` | Draws the app/tray icon (`assets\vsxdeck.ico`), Stream Deck icons and the repo thumbnail. Original artwork. |
 | `bin\` | Ready-built `VSXDeck.exe` and `VSX Deck Holder.dll`. |
 
-Everything lives in one per-user folder, `%LOCALAPPDATA%\VSX Deck`: the app, `output.txt`, and the deck state
+Everything lives in one per-user folder, `%LOCALAPPDATA%\VSX Deck`: the app, `output.txt`, `settings.ini`, and the deck state
 `slotN.vsx` (VSX state), `active.vsx` (empty = OFF), `lastslot.txt`, `bypass.txt`, `save.req`, `status.txt`.
 Only your account can write it, so no other user can feed settings to your VSX.
 
