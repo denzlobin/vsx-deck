@@ -6,11 +6,13 @@
 //               A newly added key takes the next free number (highest in use + 1), empty.
 //  - Save   : stores the open VSX window's settings into the selected preset (save.req).
 //  - Bypass : VSX's own level-matched bypass (bypass.txt).
+//  - App    : starts VSX Deck, or brings its window to the front if it is running (the app handles that).
 // Run without Stream Deck args (`node plugin.js`) to execute the self-check.
 'use strict';
-const fs = require('fs'), path = require('path'), net = require('net'), crypto = require('crypto');
+const fs = require('fs'), path = require('path'), net = require('net'), crypto = require('crypto'), cp = require('child_process');
 
 const DIR = process.env.VSX_DIR || path.join(process.env.LOCALAPPDATA || '', 'VSX Deck');   // per user
+const APP = path.join(DIR, 'VSXDeck.exe');
 const f = (n) => path.join(DIR, n);
 const read = (n) => { try { return fs.readFileSync(f(n)); } catch { return null; } };
 const mtime = (n) => { try { return fs.statSync(f(n)).mtimeMs; } catch { return 0; } };
@@ -40,6 +42,11 @@ function selectSlot(n) {                             // an empty slot only becom
   if (isChunk(preset)) writeActive(preset);
   fs.writeFileSync(f('lastslot.txt'), String(n));
   return isChunk(preset) ? 'loaded' : 'empty';
+}
+function openApp() {   // a second VSXDeck.exe only tells the running one to show its window
+  if (!fs.existsSync(APP)) return false;
+  cp.spawn(APP, [], { detached: true, stdio: 'ignore' }).unref();
+  return true;
 }
 function requestSave() { const n = lastSlot(); fs.writeFileSync(f('save.req'), String(n)); return n; }
 // Number for a newly added preset key: one past the highest used by a key or a saved preset.
@@ -176,11 +183,11 @@ function main() {
   const keys = new Map(); // context -> { action, slot, last }
   let sendJson = () => {};
   const image = (k) => k.action === ACT + 'onoff' ? onOffImage() : k.action === ACT + 'save' ? saveImage()
-    : k.action === ACT + 'bypass' ? bypassImage() : slotImage(k.slot);
+    : k.action === ACT + 'bypass' ? bypassImage() : k.action === ACT + 'app' ? null : slotImage(k.slot);
   const paint = (force) => {
     for (const [context, k] of keys) {
-      const img = image(k);
-      if (!force && img === k.last) continue;
+      const img = image(k);                            // null: keep the manifest's image (the app key)
+      if (!img || (!force && img === k.last)) continue;
       k.last = img;
       sendJson({ event: 'setImage', context, payload: { image: img, target: 0 } });
     }
@@ -215,6 +222,7 @@ function main() {
       try {
         if (k.action === ACT + 'onoff') toggle();
         else if (k.action === ACT + 'bypass') toggleBypass();
+        else if (k.action === ACT + 'app') { if (!openApp()) sendJson({ event: 'showAlert', context: m.context }); }
         else if (k.action === ACT + 'save') { const n = lastSlot(), before = mtime(`slot${n}.vsx`); requestSave(); confirmSave(m.context, n, before); }
         else {                                   // slot: short press selects (on release), hold clears
           k.held = false;
@@ -278,6 +286,7 @@ function selfTest() {
   assert.strictEqual(m.nextPreset([]), 5, 'no keys: one past the highest saved preset (slot4.vsx)');
   assert.strictEqual(m.nextPreset([1, 2, 12]), 13, 'gaps are not refilled: highest + 1');
   assert.strictEqual(m.nextPreset([99]), 99, 'capped at 99');
+  assert.strictEqual(m.openApp(), false, 'app key: no VSXDeck.exe -> false (key shows an alert)');
   for (const img of [m.onOffImage(), m.slotImage(1), m.slotImage(3), m.saveImage(), m.bypassImage()]) assert.ok(img.startsWith('data:image/svg+xml;base64,'));
   const later = new Date(Date.now() + 5000);
   fs.writeFileSync(path.join(dir, 'slot1.png'), 'PNG1'); fs.utimesSync(path.join(dir, 'slot1.png'), later, later);
@@ -301,5 +310,5 @@ function selfTest() {
 }
 
 module.exports = { wanted, applied, toggle, selectSlot, requestSave, lastSlot, roomOf, view, onOffImage, slotImage, saveImage,
-  bypassWanted, toggleBypass, bypassImage, clearSlot, nextPreset };
+  bypassWanted, toggleBypass, bypassImage, clearSlot, nextPreset, openApp };
 if (require.main === module) process.argv.includes('-port') ? main() : selfTest();

@@ -99,11 +99,12 @@ if (Test-Path $sdExe) {
 
     $action = { param($uuid, $name, $settings)
         [ordered]@{ ActionID = [guid]::NewGuid().ToString(); LinkedTitle = $false; Name = $name
-                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '2.1.0.0' }
+                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '2.3.0.0' }
                     Resources = $null; Settings = $settings; State = 0; States = @([ordered]@{ ShowTitle = $false }); UUID = $uuid } }
     $keys = [ordered]@{}   # "column,row" on a 5x3 deck
     for ($n = 1; $n -le 10; $n++) { $keys["$(($n - 1) % 5),$([Math]::Floor(($n - 1) / 5))"] = & $action 'com.vsxdeck.slot' 'VSX Preset' ([ordered]@{ slot = $n }) }
     $keys['0,2'] = & $action 'com.vsxdeck.bypass' 'VSX Bypass' ([ordered]@{})
+    $keys['1,2'] = & $action 'com.vsxdeck.app' 'VSX Deck App' ([ordered]@{})
     $keys['3,2'] = & $action 'com.vsxdeck.save' 'VSX Save' ([ordered]@{})
     $keys['4,2'] = & $action 'com.vsxdeck.onoff' 'VSX On/Off' ([ordered]@{})
     $page = [ordered]@{ Controllers = @([ordered]@{ Actions = $keys; Type = 'Keypad' }); Icon = ''; Name = '' }
@@ -126,7 +127,7 @@ if (Test-Path $sdExe) {
     if ($pageDir) {
         New-Item -ItemType Directory -Force (Join-Path $pageDir 'Images') | Out-Null
         [IO.File]::WriteAllText((Join-Path $pageDir 'manifest.json'), ($page | ConvertTo-Json -Depth 10 -Compress), $utf8)
-        Write-Host 'Rows 1-2: presets 1-10. Bottom: Bypass (left), Save, VSX ON/OFF (right).'
+        Write-Host 'Rows 1-2: presets 1-10. Bottom: Bypass, App (left), Save, VSX ON/OFF (right).'
     }
     Start-Process $sdExe
 }

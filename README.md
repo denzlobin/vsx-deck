@@ -32,7 +32,8 @@ deck ─► %LOCALAPPDATA%\VSX Deck\ ─► every VSX Deck Holder applies it to 
 4. DAW (optional): rescan VST plugins and put **VSX Deck Holder** where VSX was, e.g. Reaper's
    View → Monitoring FX. Monitoring over ASIO bypasses VB-Cable, so DAW audio is never processed twice.
 
-Profile layout (5×3 deck): rows 1–2 = presets 1–10; bottom row = Bypass (left), Save, VSX ON/OFF (right).
+Profile layout (5×3 deck): rows 1–2 = presets 1–10; bottom row = Bypass, App (left), Save, VSX ON/OFF (right).
+**App** opens VSX Deck: starts it if it isn't running, otherwise brings its window to the front.
 **More presets**: drag **VSX Preset** (VSX Deck category) onto any key. It takes the next number (highest in use + 1)
 and starts empty, ready for Save.
 

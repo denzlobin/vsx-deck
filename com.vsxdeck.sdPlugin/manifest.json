@@ -2,7 +2,7 @@
   "Name": "VSX Deck",
   "Author": "VSX Deck",
   "Description": "Slate VSX from the Stream Deck: ON/OFF, presets, Save and level-matched Bypass. Keys show what the live VSX applied.",
-  "Version": "2.2.0.0",
+  "Version": "2.3.0.0",
   "SDKVersion": 2,
   "CodePath": "plugin.js",
   "Nodejs": { "Version": "20", "Debug": "disabled" },
@@ -32,6 +32,14 @@
       "UUID": "com.vsxdeck.bypass",
       "Name": "VSX Bypass",
       "Tooltip": "VSX's own level-matched bypass (VSX keeps running). Purple = bypassed.",
+      "Icon": "action",
+      "States": [ { "Image": "key", "ShowTitle": false } ],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.vsxdeck.app",
+      "Name": "VSX Deck App",
+      "Tooltip": "Open VSX Deck: starts it, or brings its window to the front if it is already running.",
       "Icon": "action",
       "States": [ { "Image": "key", "ShowTitle": false } ],
       "SupportedInMultiActions": false

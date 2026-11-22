@@ -291,8 +291,32 @@ sealed class MainForm : Form
         tray.ContextMenuStrip.Items.Add("Exit", null, (s, e) => { exiting = true; Close(); });
         tray.DoubleClick += (s, e) => ShowWindow();
         if (startHidden) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; Load += (s, e) => Hide(); }
+        HandleCreated += (s, e) => ListenForShow();   // BeginInvoke needs the window handle
     }
-    void ShowWindow() { ShowInTaskbar = true; Show(); WindowState = FormWindowState.Normal; Activate(); }
+    void ShowWindow()
+    {
+        ShowInTaskbar = true; Show(); WindowState = FormWindowState.Normal;
+        // Windows only lets the foreground app hand out focus: borrow its input queue for a moment.
+        IntPtr fg = GetForegroundWindow();
+        uint fgThread = GetWindowThreadProcessId(fg, IntPtr.Zero), me = GetCurrentThreadId();
+        bool attached = fgThread != 0 && fgThread != me && AttachThreadInput(me, fgThread, true);
+        BringToFront(); SetForegroundWindow(Handle); Activate();
+        if (attached) AttachThreadInput(me, fgThread, false);
+    }
+
+    // Another launch (deck key, Start menu) signals this event to bring the window up.
+    public const string ShowEvent = "VSXDeck.show";
+    EventWaitHandle showEvent;
+    void ListenForShow()
+    {
+        showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEvent);
+        ThreadPool.RegisterWaitForSingleObject(showEvent, (s, timedOut) => BeginInvoke((Action)ShowWindow), null, -1, false);
+    }
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
     static Icon AppIcon(Size size)   // vsxdeck.ico is embedded by build.ps1; Windows picks the frame for the size
     {
         using (var s = typeof(MainForm).Assembly.GetManifestResourceStream("vsxdeck.ico"))
@@ -389,7 +413,12 @@ static class Program
         bool created, tray = Array.IndexOf(args, "--tray") >= 0;
         using (new Mutex(true, "VSXDeck.single", out created))
         {
-            if (!created) return; // already running
+            if (!created)   // already running: a normal launch (deck key, Start menu) brings its window up
+            {
+                EventWaitHandle show;
+                if (!tray && EventWaitHandle.TryOpenExisting(MainForm.ShowEvent, out show)) { AllowSetForegroundWindow(-1); show.Set(); show.Dispose(); }
+                return;
+            }
             Application.EnableVisualStyles();
             // Started at login, devices or files may not be ready yet: retry quietly for ~30 s before complaining.
             for (int attempt = 1; ; attempt++)
@@ -404,6 +433,7 @@ static class Program
             }
         }
     }
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);   // -1 = any
     static void Log(string line)
     {
         try { File.AppendAllText(Path.Combine(Cfg.AppDir, "vsxdeck.log"), DateTime.Now.ToString("s") + "  " + line + Environment.NewLine); }
