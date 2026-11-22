@@ -15,10 +15,10 @@ static class Cfg
 {
     public const string CaptureName = "CABLE Output";      // VB-Cable recording side (what Windows plays into)
     public const int Block = 256;                          // plugin block size (frames)
+    // App, plugin copy, output.txt and the deck state all live in one per-user folder.
     public static readonly string AppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VSX Deck");
-    public static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VSX Deck");
     public static readonly string Plugin = Path.Combine(AppDir, "VSX Deck Holder.dll");
-    public static string Data(string name) { return Path.Combine(DataDir, name); }
+    public static string Data(string name) { return Path.Combine(AppDir, name); }
     // Output device: part of its name, from output.txt (written by the installer). Default: Volt 276.
     public static string RenderName
     {

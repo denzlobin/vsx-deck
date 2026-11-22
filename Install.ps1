@@ -5,8 +5,7 @@
   Needs: Slate VSX (VST2: C:\Program Files\VstPlugins\VSX.dll) and the Elgato Stream Deck app.
   Sets up:
     - VB-Cable (asks first; admin prompt)             Windows -> VB-Cable -> VSX Deck -> your interface
-    - VSX Deck app + VSX Deck Holder                  %LOCALAPPDATA%\VSX Deck (starts at login, in the tray)
-    - deck state and room slots                       %ProgramData%\VSX Deck
+    - VSX Deck app, VSX Deck Holder, deck state       %LOCALAPPDATA%\VSX Deck (per user; starts at login, in the tray)
     - VSX Deck Holder VST2 for DAWs (asks; admin)     C:\Program Files\VstPlugins\VSX Deck Holder.dll
     - Stream Deck plugin + "VSX Deck" profile         slots 1-10, Bypass, Save, VSX ON/OFF
 #>
@@ -14,7 +13,6 @@ param([string]$Output)
 $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
 $app = Join-Path $env:LOCALAPPDATA 'VSX Deck'
-$data = Join-Path $env:ProgramData 'VSX Deck'
 $vsx = Join-Path $env:ProgramFiles 'VstPlugins\VSX.dll'
 $holder = 'VSX Deck Holder.dll'
 function Step($m) { Write-Host "`n== $m" -ForegroundColor Cyan }
@@ -67,7 +65,7 @@ else {
 
 Step "VSX Deck app in $app"
 Get-Process VSXDeck -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1
-New-Item -ItemType Directory -Force $app, $data | Out-Null
+New-Item -ItemType Directory -Force $app | Out-Null
 Copy-Item "$kit\bin\*" $app -Force
 $outFile = Join-Path $app 'output.txt'
 if ($Output) { Set-Content $outFile $Output -NoNewline }

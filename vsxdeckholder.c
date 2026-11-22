@@ -2,7 +2,7 @@
  * switches its settings, so switching never re-creates VSX (no volume burst). Used by VSX Deck (system audio)
  * and in a DAW (e.g. Reaper's Monitoring FX).
  *
- * Deck state lives in %ProgramData%\VSX Deck\ and is polled every 50 ms:
+ * Deck state lives in %LOCALAPPDATA%\VSX Deck\ (per user) and is polled every 50 ms:
  *   active.vsx  VSX state ("VC2!..."): applied to the live VSX. Empty = OFF: 30 ms fade to dry, VSX keeps running.
  *   bypass.txt  "1"/"0": VSX's own level-matched bypass (a flag in its state), kept across room changes.
  *   save.req    "<slot>": the instance whose window is open stores its settings as slot<N>.vsx (un-bypassed).
@@ -23,6 +23,7 @@
 #define VSX_DLL L"C:\\Program Files\\VstPlugins\\VSX.dll"
 #define FADE_SECONDS 0.03f
 #define POLL_MS 50
+#define MAX_STATE (1 << 20)   /* largest deck file we read */
 
 /* ---- minimal VST2 ABI ------------------------------------------------------------------------------- */
 typedef struct AEffect AEffect;
@@ -86,8 +87,9 @@ static intptr_t innerHost(AEffect *e, int32_t op, int32_t idx, intptr_t v, void 
 }
 
 /* ---- deck state files -------------------------------------------------------------------------------- */
-static void dataPath(wchar_t *buf, const wchar_t *name) {
-    if (!GetEnvironmentVariableW(L"ProgramData", buf, MAX_PATH - 64)) wcscpy_s(buf, MAX_PATH, L"C:\\ProgramData");
+static void dataPath(wchar_t *buf, const wchar_t *name) {   /* per-user: only this user can write the deck state */
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+    if (!n || n > MAX_PATH - 64) { buf[0] = 0; return; }       /* unusable: every file operation then just fails */
     wcscat_s(buf, MAX_PATH, L"\\VSX Deck\\");
     wcscat_s(buf, MAX_PATH, name);
 }
@@ -105,6 +107,7 @@ static char *readFile(const wchar_t *name, DWORD *size) {   /* NUL-terminated co
     HANDLE f = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
     if (f == INVALID_HANDLE_VALUE) return NULL;
     DWORD n = GetFileSize(f, NULL), got = 0;
+    if (n > MAX_STATE) { CloseHandle(f); return NULL; }        /* VSX states are ~1 KB; refuse anything odd */
     char *b = (char*)malloc((size_t)n + 1);
     if (b && !(ReadFile(f, b, n, &got, NULL) && got == n)) { free(b); b = NULL; }
     CloseHandle(f);

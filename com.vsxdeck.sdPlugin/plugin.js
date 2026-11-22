@@ -1,5 +1,5 @@
 // VSX Deck: Stream Deck keys (plain Node 20, no packages; Stream Deck's WebSocket is spoken by the tiny client below).
-// They write the deck state in %ProgramData%\VSX Deck\, which every VSX Deck Holder instance applies to its VSX.
+// They write the deck state in %LOCALAPPDATA%\VSX Deck\, which every VSX Deck Holder instance applies to its VSX.
 //  - On/Off : shows what the LIVE VSX applied (status.txt) and toggles: ON = last chosen slot, OFF = dry.
 //  - Slot N : shows slot N's room (picture if VSX Deck made one), green while active. Press = load it
 //             (an empty slot becomes the Save target). Hold 1.5 s = clear it (recoverable).
@@ -9,7 +9,7 @@
 'use strict';
 const fs = require('fs'), path = require('path'), net = require('net'), crypto = require('crypto');
 
-const DIR = process.env.VSX_DIR || path.join(process.env.ProgramData || 'C:\\ProgramData', 'VSX Deck');
+const DIR = process.env.VSX_DIR || path.join(process.env.LOCALAPPDATA || '', 'VSX Deck');   // per user
 const f = (n) => path.join(DIR, n);
 const read = (n) => { try { return fs.readFileSync(f(n)); } catch { return null; } };
 const mtime = (n) => { try { return fs.statSync(f(n)).mtimeMs; } catch { return 0; } };
