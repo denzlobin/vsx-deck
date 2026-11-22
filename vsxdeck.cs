@@ -365,13 +365,27 @@ static class Program
     [STAThread]
     static void Main(string[] args)
     {
-        bool created;
+        bool created, tray = Array.IndexOf(args, "--tray") >= 0;
         using (new Mutex(true, "VSXDeck.single", out created))
         {
             if (!created) return; // already running
             Application.EnableVisualStyles();
-            try { Application.Run(new MainForm(Array.IndexOf(args, "--tray") >= 0)); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "VSX Deck", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            // Started at login, devices or files may not be ready yet: retry quietly for ~30 s before complaining.
+            for (int attempt = 1; ; attempt++)
+            {
+                try { Application.Run(new MainForm(tray)); return; }
+                catch (Exception ex)
+                {
+                    Log(string.Format("attempt {0}: {1} (plugin file present: {2})", attempt, ex.Message, File.Exists(Cfg.Plugin)));
+                    if (!tray || attempt >= 6) { MessageBox.Show(ex.Message, "VSX Deck", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+                    Thread.Sleep(5000);
+                }
+            }
         }
+    }
+    static void Log(string line)
+    {
+        try { File.AppendAllText(Path.Combine(Cfg.AppDir, "vsxdeck.log"), DateTime.Now.ToString("s") + "  " + line + Environment.NewLine); }
+        catch (IOException) { }
     }
 }
