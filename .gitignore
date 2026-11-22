@@ -4,7 +4,9 @@
 *.exp
 *.pdb
 *.tmp
-# generated per user from their own VSX; never commit
+# generated per user from their own VSX (presets, room pictures); never commit
 *.vsx
 *.png
-!com.vsxdeck.sdPlugin/icon*.png
+# our own artwork (make-icons.ps1)
+!assets/*.png
+!com.vsxdeck.sdPlugin/*.png
