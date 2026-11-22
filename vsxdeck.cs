@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.2.5")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.2.5")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.2.6")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.2.6")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -229,6 +229,9 @@ sealed class Engine : IDisposable
     public int Glitches { get { return Late + CableGap + Discontinuity + Resync; } }
     // One line per dropout with timings, written to vsxdeck.log by the window (the audio thread never touches files).
     public readonly System.Collections.Concurrent.ConcurrentQueue<string> Events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+    // ponytail: crackle diagnosis, remove once found. 4 s around each play start/stop: input L/R + VSX output L/R.
+    public readonly System.Collections.Concurrent.ConcurrentQueue<Tuple<string, float[]>> Clips = new System.Collections.Concurrent.ConcurrentQueue<Tuple<string, float[]>>();
+    public int Rate { get { return rate; } }
 
     public Engine(Func<int, Vst> vstFor)
     {
@@ -280,6 +283,8 @@ sealed class Engine : IDisposable
             // Clicks during silence: did they come in through the cable, or out of VSX with silent input?
             const float Quiet = 1e-4f, Loud = 1e-3f;   // -80 dB, -60 dB
             long quietFrames = 0, outLoggedAt = long.MinValue / 2;   // quietFrames when VSX output was last logged
+            int ringN = rate * 4; var ring = new float[ringN * 4]; long done = 0, dumpAt = -1; string dumpWhy = null;
+            long quietRun = 0, loudRun = 0;
             while (run)
             {
                 Thread.Sleep(1);                                               // ~1 ms with timeBeginPeriod(1), see Program
@@ -330,6 +335,25 @@ sealed class Engine : IDisposable
                     vst.Process(ins, outs, B);
                     lastProc += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
                     Marshal.Copy(outL, l, 0, B); Marshal.Copy(outR, r, 0, B);
+                    {   // clip ring: input is still in inL/inR (VSX writes to separate buffers)
+                        float ip = 0;
+                        for (int i = 0; i < B; i++)
+                        {
+                            int k = (int)((done + i) % ringN) * 4;
+                            float a = ReadF(inL, i), b = ReadF(inR, i);
+                            ring[k] = a; ring[k + 1] = b; ring[k + 2] = l[i]; ring[k + 3] = r[i];
+                            ip = Math.Max(ip, Math.Max(Math.Abs(a), Math.Abs(b)));
+                        }
+                        done += B;
+                        if (ip > Loud) { if (quietRun >= rate && dumpAt < 0) { dumpAt = done + rate * 3 / 2; dumpWhy = "start"; } loudRun += B; quietRun = 0; }
+                        else if (ip < Quiet) { quietRun += B; if (loudRun >= rate && quietRun >= rate / 10 && dumpAt < 0) { dumpAt = done + rate * 3 / 2; dumpWhy = "stop"; } if (quietRun >= rate / 10) loudRun = 0; }
+                        if (dumpAt >= 0 && done >= dumpAt)
+                        {
+                            var clip = new float[ringN * 4];
+                            for (int i = 0; i < ringN; i++) Array.Copy(ring, (int)((done + i) % ringN) * 4, clip, i * 4, 4);
+                            Clips.Enqueue(Tuple.Create(dumpWhy, clip)); dumpAt = -1;
+                        }
+                    }
                     if (quietFrames > rate * 2 && quietFrames - outLoggedAt > rate / 2)
                     {
                         float op = 0; for (int i = 0; i < B; i++) op = Math.Max(op, Math.Max(Math.Abs(l[i]), Math.Abs(r[i])));
@@ -457,9 +481,31 @@ sealed class MainForm : Form
     {
         if (engine == null) return;
         string ev; while (engine.Events.TryDequeue(out ev)) Program.Log(ev);
+        Tuple<string, float[]> clip;
+        while (engine.Clips.TryDequeue(out clip)) SaveClip(clip.Item1, clip.Item2, engine.Rate);
         if (engine.Glitches == shownGlitches) return;
         shownGlitches = engine.Glitches;
         info.Text = shownGlitches == 0 ? infoText : string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches);
+    }
+    static void SaveClip(string why, float[] x, int rate)   // ponytail: crackle diagnosis, remove once found
+    {
+        try
+        {
+            string dir = Cfg.Data("clips"); Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, DateTime.Now.ToString("HHmmss") + "-" + why + ".wav");
+            using (var w = new BinaryWriter(File.Create(path)))
+            {
+                int bytes = x.Length * 4;
+                w.Write(0x46464952); w.Write(36 + bytes); w.Write(0x45564157);           // RIFF size WAVE
+                w.Write(0x20746d66); w.Write(16); w.Write((short)3); w.Write((short)4);   // fmt, IEEE float, 4 ch
+                w.Write(rate); w.Write(rate * 16); w.Write((short)16); w.Write((short)32);
+                w.Write(0x61746164); w.Write(bytes);                                       // data
+                var buf = new byte[bytes]; Buffer.BlockCopy(x, 0, buf, 0, bytes); w.Write(buf);
+            }
+            Program.Log("clip saved: " + path);
+            foreach (var old in new DirectoryInfo(dir).GetFiles("*.wav").OrderByDescending(f => f.LastWriteTimeUtc).Skip(12)) old.Delete();
+        }
+        catch (IOException) { }
     }
     void OpenSettings()
     {
