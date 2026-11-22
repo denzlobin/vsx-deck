@@ -17,7 +17,9 @@ deck ─► %LOCALAPPDATA%\VSX Deck\ ─► every VSX Deck Holder applies it to 
 ## Install
 
 1. Install **Slate VSX** (its VST2, `C:\Program Files\VstPlugins\VSX.dll`, is used) and the **Elgato Stream Deck** app.
-2. Run, from this folder:
+2. Run, from this folder, in a normal PowerShell window (Start menu). Not from a terminal inside a packaged
+   (Microsoft Store/MSIX) app: Windows would redirect its files in `%LOCALAPPDATA%` to that app's private copy,
+   where VSX Deck and the Stream Deck can't see them.
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\Install.ps1
    ```
