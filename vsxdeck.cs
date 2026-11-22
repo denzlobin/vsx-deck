@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.2.4")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.2.4")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.2.5")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.2.5")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -257,6 +257,7 @@ sealed class Engine : IDisposable
     // In the loop: any failure (e.g. 0x88890004, device unplugged or switched off) stops it; the window reconnects.
     static void Ok(int hr, string what) { if (hr < 0) throw new Exception(what + " failed 0x" + hr.ToString("X8")); }
     static double Ms(long ticks) { return ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency; }
+    static double Db(float peak) { return 20 * Math.Log10(peak); }
 
     void Loop()
     {
@@ -276,6 +277,9 @@ sealed class Engine : IDisposable
             bool playing = false, primed = false; uint lastPad = 0;
             long prev = System.Diagnostics.Stopwatch.GetTimestamp(), lastProc = 0;
             int cushionMin = int.MaxValue, cushionMax = 0, cushionAt = Environment.TickCount + 30000;
+            // Clicks during silence: did they come in through the cable, or out of VSX with silent input?
+            const float Quiet = 1e-4f, Loud = 1e-3f;   // -80 dB, -60 dB
+            long quietFrames = 0, outLoggedAt = long.MinValue / 2;   // quietFrames when VSX output was last logged
             while (run)
             {
                 Thread.Sleep(1);                                               // ~1 ms with timeBeginPeriod(1), see Program
@@ -288,11 +292,20 @@ sealed class Engine : IDisposable
                     if ((fl & 1) != 0 && playing) Discontinuity++;             // DATA_DISCONTINUITY
                     int need = (int)fr * 2;
                     if (fifoN + need > fifo.Length) { fifoN = 0; Resync++; }   // ponytail: overflow -> drop backlog
+                    float peak = 0;
                     if ((fl & 2) != 0) Array.Clear(fifo, fifoN, need);         // SILENT flag
                     else for (int i = 0; i < fr; i++)
                     {
-                        fifo[fifoN + i * 2] = ReadF(data, i * capCh);
-                        fifo[fifoN + i * 2 + 1] = ReadF(data, i * capCh + (capCh > 1 ? 1 : 0));
+                        float a = fifo[fifoN + i * 2] = ReadF(data, i * capCh);
+                        float b = fifo[fifoN + i * 2 + 1] = ReadF(data, i * capCh + (capCh > 1 ? 1 : 0));
+                        peak = Math.Max(peak, Math.Max(Math.Abs(a), Math.Abs(b)));
+                    }
+                    if (peak < Quiet) quietFrames += fr;
+                    else
+                    {
+                        if (quietFrames > rate * 2 && peak > Loud)
+                            Events.Enqueue(string.Format("input burst after {0:0.0} s of silence: peak {1:0} dB, packet {2} frames, flags {3}", quietFrames / (double)rate, Db(peak), fr, fl));
+                        quietFrames = 0; outLoggedAt = long.MinValue / 2;
                     }
                     fifoN += need;
                     Ok(capC.ReleaseBuffer(fr), "capture");
@@ -317,6 +330,11 @@ sealed class Engine : IDisposable
                     vst.Process(ins, outs, B);
                     lastProc += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
                     Marshal.Copy(outL, l, 0, B); Marshal.Copy(outR, r, 0, B);
+                    if (quietFrames > rate * 2 && quietFrames - outLoggedAt > rate / 2)
+                    {
+                        float op = 0; for (int i = 0; i < B; i++) op = Math.Max(op, Math.Max(Math.Abs(l[i]), Math.Abs(r[i])));
+                        if (op > Loud) { outLoggedAt = quietFrames; Events.Enqueue(string.Format("VSX output with silent input ({0:0.0} s): peak {1:0} dB", quietFrames / (double)rate, Db(op))); }
+                    }
                     IntPtr buf; Ok(renC.GetBuffer((uint)B, out buf), "output");
                     for (int i = 0; i < B; i++) for (int c = 0; c < renCh; c++) WriteF(buf, i * renCh + c, c == 0 ? l[i] : c == 1 ? r[i] : 0f);
                     Ok(renC.ReleaseBuffer((uint)B, 0), "output");
