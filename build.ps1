@@ -5,7 +5,8 @@ $src = $PSScriptRoot; $bin = Join-Path $src 'bin'
 New-Item -ItemType Directory -Force $bin | Out-Null
 
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-& $csc /nologo /target:winexe /platform:x64 /optimize /unsafe /r:System.Windows.Forms.dll /r:System.Drawing.dll "/out:$bin\VSXDeck.exe" "$src\vsxdeck.cs"
+$ico = "$src\assets\vsxdeck.ico"   # made by make-icons.ps1
+& $csc /nologo /target:winexe /platform:x64 /optimize /unsafe /r:System.Windows.Forms.dll /r:System.Drawing.dll "/win32icon:$ico" "/resource:$ico,vsxdeck.ico" "/out:$bin\VSXDeck.exe" "$src\vsxdeck.cs"
 if ($LASTEXITCODE) { throw 'VSXDeck.exe failed to build' }
 
 $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

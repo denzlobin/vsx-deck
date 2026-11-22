@@ -11,6 +11,12 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
+// Shown by Windows wherever it names the app (e.g. the microphone indicator, Task Manager, file properties).
+[assembly: System.Reflection.AssemblyTitle("VSX Deck")]
+[assembly: System.Reflection.AssemblyProduct("VSX Deck")]
+[assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
+[assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
+
 static class Cfg
 {
     public const string CaptureName = "CABLE Output";      // VB-Cable recording side (what Windows plays into)
@@ -261,7 +267,7 @@ sealed class MainForm : Form
     public MainForm(bool startHidden)
     {
         Text = "VSX Deck"; FormBorderStyle = FormBorderStyle.FixedSingle; MaximizeBox = false;
-        Icon = SystemIcons.Application;
+        Icon = AppIcon(SystemInformation.IconSize);
         editor.Dock = DockStyle.Fill;
         Controls.Add(editor); Controls.Add(info);
         engine = new Engine();
@@ -279,7 +285,7 @@ sealed class MainForm : Form
         };
         idle.Start();
 
-        tray.Icon = SystemIcons.Application; tray.Text = "VSX Deck"; tray.Visible = true;
+        tray.Icon = AppIcon(SystemInformation.SmallIconSize); tray.Text = "VSX Deck"; tray.Visible = true;
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("Show VSX", null, (s, e) => ShowWindow());
         tray.ContextMenuStrip.Items.Add("Exit", null, (s, e) => { exiting = true; Close(); });
@@ -287,6 +293,11 @@ sealed class MainForm : Form
         if (startHidden) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; Load += (s, e) => Hide(); }
     }
     void ShowWindow() { ShowInTaskbar = true; Show(); WindowState = FormWindowState.Normal; Activate(); }
+    static Icon AppIcon(Size size)   // vsxdeck.ico is embedded by build.ps1; Windows picks the frame for the size
+    {
+        using (var s = typeof(MainForm).Assembly.GetManifestResourceStream("vsxdeck.ico"))
+            return s != null ? new Icon(s, size) : SystemIcons.Application;
+    }
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; } // keep running in the tray
@@ -332,10 +343,10 @@ sealed class MainForm : Form
         }
         catch (IOException) { }
     }
-    // 144x144 key: room picture, slot number, room name on a dark band; active = green frame and band.
+    // 144x144 key: room picture, preset number badge, room name on a dark band; active = green frame and badge.
     static void SaveKey(Bitmap shot, Rectangle src, int slot, string room, bool active, string path)
     {
-        var green = Color.FromArgb(31, 143, 78);
+        Color green = Color.FromArgb(0x35, 0xd0, 0x7f), charcoal = Color.FromArgb(0x17, 0x18, 0x1c);
         using (var key = new Bitmap(144, 144))
         using (var g = Graphics.FromImage(key))
         {
@@ -344,11 +355,14 @@ sealed class MainForm : Form
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             g.DrawImage(shot, new Rectangle(0, 0, 144, 144), src, GraphicsUnit.Pixel);
             if (!active) using (var dim = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillRectangle(dim, 0, 0, 144, 144);
-            using (var band = new SolidBrush(active ? Color.FromArgb(225, green) : Color.FromArgb(190, 0, 0, 0))) g.FillRectangle(band, 0, 98, 144, 46);
-            using (var badge = new SolidBrush(active ? green : Color.FromArgb(200, 0, 0, 0))) g.FillEllipse(badge, 6, 6, 40, 40);
-            using (var num = new Font("Segoe UI", slot < 10 ? 20 : 15, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var band = new SolidBrush(Color.FromArgb(230, charcoal))) g.FillRectangle(band, 0, 98, 144, 46);
+            var badgeRect = new RectangleF(8, 8, slot < 10 ? 36 : 44, 30);
+            using (var badgePath = RoundRect(badgeRect, 8))
+            using (var badge = new SolidBrush(active ? green : Color.FromArgb(220, charcoal))) g.FillPath(badge, badgePath);
+            using (var num = new Font("Segoe UI", 19, FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                g.DrawString(slot.ToString(), num, Brushes.White, new RectangleF(6, 6, 40, 40), sf);
+            using (var ink = new SolidBrush(active ? charcoal : Color.White))
+                g.DrawString(slot.ToString(), num, ink, badgeRect, sf);
             using (var name = new Font("Segoe UI", 14, FontStyle.Bold, GraphicsUnit.Pixel))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisWord })
                 g.DrawString(room, name, Brushes.White, new RectangleF(4, 99, 136, 44), sf);
@@ -357,6 +371,13 @@ sealed class MainForm : Form
             key.Save(tmp, System.Drawing.Imaging.ImageFormat.Png);
             File.Copy(tmp, path, true); File.Delete(tmp);
         }
+    }
+    static System.Drawing.Drawing2D.GraphicsPath RoundRect(RectangleF r, float radius)
+    {
+        var p = new System.Drawing.Drawing2D.GraphicsPath(); float d = radius * 2;
+        p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure(); return p;
     }
 }
 

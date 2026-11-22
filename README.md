@@ -1,5 +1,7 @@
 # VSX Deck
 
+![VSX Deck](assets/thumbnail.png)
+
 Control **Slate VSX** headphone correction from an **Elgato Stream Deck**, for all system audio and in your DAW:
 
 - **VSX ON/OFF**: green = on (with the room name), grey = off. One key, showing what the live VSX actually does.
@@ -64,6 +66,7 @@ generated files.
 | `vsxdeck.cs` | **VSX Deck** app: VB-Cable → VSX Deck Holder → output (WASAPI), VSX window, tray, key pictures. |
 | `com.vsxdeck.sdPlugin\` | Stream Deck keys (Node 20, no packages). `node plugin.js` runs its self-check. |
 | `Install.ps1`, `build.ps1` | Setup; rebuild `bin\` (needs Visual Studio C++ Build Tools for the plugin). |
+| `make-icons.ps1` | Draws the app/tray icon (`assets\vsxdeck.ico`), Stream Deck icons and the repo thumbnail. Original artwork. |
 | `bin\` | Ready-built `VSXDeck.exe` and `VSX Deck Holder.dll`. |
 
 Everything lives in one per-user folder, `%LOCALAPPDATA%\VSX Deck`: the app, `output.txt`, and the deck state

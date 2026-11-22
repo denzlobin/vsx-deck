@@ -2,7 +2,7 @@
   "Name": "VSX Deck",
   "Author": "VSX Deck",
   "Description": "Slate VSX from the Stream Deck: ON/OFF, presets, Save and level-matched Bypass. Keys show what the live VSX applied.",
-  "Version": "2.1.0.0",
+  "Version": "2.2.0.0",
   "SDKVersion": 2,
   "CodePath": "plugin.js",
   "Nodejs": { "Version": "20", "Debug": "disabled" },
@@ -15,33 +15,33 @@
     {
       "UUID": "com.vsxdeck.onoff",
       "Name": "VSX On/Off",
-      "Tooltip": "Toggle VSX. Amber outline = not confirmed by a running VSX.",
-      "Icon": "icon",
-      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "Tooltip": "Toggle VSX. Dashed amber outline = not confirmed by a running VSX.",
+      "Icon": "action",
+      "States": [ { "Image": "key", "ShowTitle": false } ],
       "SupportedInMultiActions": false
     },
     {
       "UUID": "com.vsxdeck.slot",
       "Name": "VSX Preset",
       "Tooltip": "Load a VSX preset (green = active). Hold 1.5 s to clear. A newly added key takes the next free number, empty and ready for Save.",
-      "Icon": "icon",
-      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "Icon": "action",
+      "States": [ { "Image": "key", "ShowTitle": false } ],
       "SupportedInMultiActions": false
     },
     {
       "UUID": "com.vsxdeck.bypass",
       "Name": "VSX Bypass",
-      "Tooltip": "VSX's own level-matched bypass (VSX keeps running). Amber = bypassed.",
-      "Icon": "icon",
-      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "Tooltip": "VSX's own level-matched bypass (VSX keeps running). Purple = bypassed.",
+      "Icon": "action",
+      "States": [ { "Image": "key", "ShowTitle": false } ],
       "SupportedInMultiActions": false
     },
     {
       "UUID": "com.vsxdeck.save",
       "Name": "VSX Save",
-      "Tooltip": "Save the open VSX window's settings into the selected slot.",
-      "Icon": "icon",
-      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "Tooltip": "Save the open VSX window's settings into the selected preset.",
+      "Icon": "action",
+      "States": [ { "Image": "key", "ShowTitle": false } ],
       "SupportedInMultiActions": false
     }
   ]

@@ -68,13 +68,17 @@ function twoLines(text, width) {
   for (const w of (text || '').split(' ')) ((l1.join(' ') + ' ' + w).length <= width && !l2.length ? l1 : l2).push(w);
   return [l1.join(' '), l2.join(' ').slice(0, width + 2)];
 }
-function key({ bg, fg, top, big, bigSize = 38, sub = '', dashed = false, outline = '' }) {
+// Palette ("B · Deck", green): charcoal keys, green = on/active, purple = bypassed.
+const C = { tile: '#17181c', key: '#1f2024', dim: '#8e8f96', light: '#f4f3f1', green: '#35d07f', track: '#3d4049',
+            purple: '#4a3b8c', save: '#2b2c31', off: '#1b1c20', faint: '#55565c' };
+function key({ bg, fg, top = '', bar = '', big, bigSize = 38, sub = '', dashed = false, outline = '' }) {
   const [a, b] = twoLines(sub, 12);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
 <rect width="144" height="144" rx="18" fill="${bg}"/>
 ${dashed ? '<rect x="6" y="6" width="132" height="132" rx="14" fill="none" stroke="#f0b429" stroke-width="5" stroke-dasharray="12 8"/>' : ''}
 ${outline ? `<rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${outline}" stroke-width="6"/>` : ''}
-<text x="72" y="44" font-family="Segoe UI,Arial" font-size="26" font-weight="600" fill="${fg}" text-anchor="middle">${esc(top)}</text>
+${bar ? `<rect x="44" y="26" width="56" height="12" rx="6" fill="${bar}"/>` : ''}
+<text x="72" y="44" font-family="Segoe UI,Arial" font-size="24" font-weight="600" fill="${fg}" text-anchor="middle">${esc(top)}</text>
 <text x="72" y="86" font-family="Segoe UI,Arial" font-size="${bigSize}" font-weight="700" fill="${fg}" text-anchor="middle">${esc(big)}</text>
 <text x="72" y="112" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(a)}</text>
 <text x="72" y="130" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(b)}</text>
@@ -91,15 +95,17 @@ function view() {
 function onOffImage() {
   const v = view(), a = applied();
   const sub = v.confirmed && a && a.bypass ? 'BYPASSED' : v.room;
-  return key({ bg: v.on ? '#1f8f4e' : '#2b2b2b', fg: v.on ? '#fff' : '#9a9a9a', top: 'VSX', big: v.on ? 'ON' : 'OFF', sub, dashed: !v.confirmed });
+  return v.on
+    ? key({ bg: C.tile, fg: C.light, bar: C.green, outline: v.confirmed ? C.green : '', big: 'ON', sub, dashed: !v.confirmed })
+    : key({ bg: C.key, fg: C.dim, bar: C.track, big: 'OFF', sub: 'dry', dashed: !v.confirmed });
 }
-// Bypass = VSX's own level-matched bypass (VSX keeps running). Amber when bypassed; dashed until the live
+// Bypass = VSX's own level-matched bypass (VSX keeps running). Purple when bypassed; dashed until the live
 // instance reports the same state; dim while VSX is OFF (nothing to bypass).
 function bypassImage() {
   const w = bypassWanted(), a = applied(), on = wanted();
-  if (!on) return key({ bg: '#1b1b1b', fg: '#555', top: 'BYPASS', big: w ? 'ON' : 'OFF', bigSize: 32, sub: 'VSX is off' });
+  if (!on) return key({ bg: C.off, fg: C.faint, top: 'BYPASS', big: w ? 'ON' : 'OFF', bigSize: 32, sub: 'VSX is off' });
   const confirmed = !!a && a.on && a.bypass === w;
-  return key({ bg: w ? '#b7791f' : '#2b2b2b', fg: w ? '#fff' : '#cfcfcf', top: 'BYPASS', big: w ? 'ON' : 'OFF', bigSize: 32,
+  return key({ bg: w ? C.purple : C.save, fg: w ? '#f1edff' : '#cfcfcf', top: 'BYPASS', big: w ? 'ON' : 'OFF', bigSize: 32,
                sub: 'level matched', dashed: !confirmed });
 }
 // Room picture keys: VSX Deck bakes slotN.png / slotN-active.png from the user's own VSX window (local only).
@@ -115,13 +121,15 @@ function slotImage(n) {
   const pic = room && pictureKey(n, active);
   if (pic) return pic;
   if (!room) return lastSlot() === n
-    ? key({ bg: '#1b1b1b', fg: '#cfe0ff', top: 'VSX', big: String(n), sub: 'save here', outline: '#3b82f6' })
-    : key({ bg: '#1b1b1b', fg: '#555', top: 'VSX', big: String(n), sub: 'empty' });
-  return key({ bg: active ? '#1f8f4e' : '#2b2b2b', fg: active ? '#fff' : '#cfcfcf', top: 'VSX', big: String(n), sub: room });
+    ? key({ bg: C.key, fg: C.light, top: 'PRESET', big: String(n), sub: 'save here', outline: C.dim })
+    : key({ bg: C.off, fg: C.faint, top: 'PRESET', big: String(n), sub: 'empty' });
+  return active
+    ? key({ bg: C.tile, fg: C.light, top: 'PRESET', big: String(n), sub: room, outline: C.green })
+    : key({ bg: C.key, fg: '#cfcfcf', top: 'PRESET', big: String(n), sub: room });
 }
 function saveImage() {
   const n = lastSlot(), room = roomOf(read(`slot${n}.vsx`));
-  return key({ bg: '#23395d', fg: '#fff', top: 'SAVE', big: `→ ${n}`, bigSize: 34, sub: room || 'empty preset' });
+  return key({ bg: C.save, fg: C.light, top: 'SAVE', big: `→ ${n}`, bigSize: 34, sub: room || 'empty preset' });
 }
 
 // ---- minimal WebSocket client (text frames, client-masked) -------------------------------------
