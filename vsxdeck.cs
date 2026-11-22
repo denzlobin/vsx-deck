@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.2.2")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.2.2")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.2.3")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.2.3")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -226,6 +226,8 @@ sealed class Engine : IDisposable
     // VB-Cable reported a discontinuity, or a backlog was trimmed (resync).
     public int Late, CableGap, Discontinuity, Resync;
     public int Glitches { get { return Late + CableGap + Discontinuity + Resync; } }
+    // One line per dropout with timings, written to vsxdeck.log by the window (the audio thread never touches files).
+    public readonly System.Collections.Concurrent.ConcurrentQueue<string> Events = new System.Collections.Concurrent.ConcurrentQueue<string>();
 
     public Engine(Func<int, Vst> vstFor)
     {
@@ -251,6 +253,9 @@ sealed class Engine : IDisposable
         thread.Start();
     }
     static void Check(int hr, string what) { if (hr != 0) throw new Exception(what + " failed 0x" + hr.ToString("X8")); }
+    // In the loop: any failure (e.g. 0x88890004, device unplugged or switched off) stops it; the window reconnects.
+    static void Ok(int hr, string what) { if (hr < 0) throw new Exception(what + " failed 0x" + hr.ToString("X8")); }
+    static double Ms(long ticks) { return ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency; }
 
     void Loop()
     {
@@ -265,14 +270,16 @@ sealed class Engine : IDisposable
             var l = new float[B]; var r = new float[B];
             cap.Start(); ren.Start();
             bool playing = false; uint lastPad = 0;
+            long prev = System.Diagnostics.Stopwatch.GetTimestamp(), lastProc = 0;
             while (run)
             {
                 Thread.Sleep(1);                                               // ~1 ms with timeBeginPeriod(1), see Program
-                uint pk; capC.GetNextPacketSize(out pk);
+                long now = System.Diagnostics.Stopwatch.GetTimestamp(), gap = now - prev; prev = now;
+                uint pk; Ok(capC.GetNextPacketSize(out pk), "capture");
                 while (pk > 0)
                 {
                     IntPtr data; uint fr, fl; long p1, p2;
-                    capC.GetBuffer(out data, out fr, out fl, out p1, out p2);
+                    Ok(capC.GetBuffer(out data, out fr, out fl, out p1, out p2), "capture");
                     if ((fl & 1) != 0 && playing) Discontinuity++;             // DATA_DISCONTINUITY
                     int need = (int)fr * 2;
                     if (fifoN + need > fifo.Length) { fifoN = 0; Resync++; }   // ponytail: overflow -> drop backlog
@@ -283,21 +290,29 @@ sealed class Engine : IDisposable
                         fifo[fifoN + i * 2 + 1] = ReadF(data, i * capCh + (capCh > 1 ? 1 : 0));
                     }
                     fifoN += need;
-                    capC.ReleaseBuffer(fr);
-                    capC.GetNextPacketSize(out pk);
+                    Ok(capC.ReleaseBuffer(fr), "capture");
+                    Ok(capC.GetNextPacketSize(out pk), "capture");
                 }
-                uint pad; ren.GetCurrentPadding(out pad);
-                if (playing && pad == 0 && lastPad > 0) { if (fifoN >= B * 2) Late++; else CableGap++; }
+                uint pad; Ok(ren.GetCurrentPadding(out pad), "output");
+                if (playing && pad == 0 && lastPad > 0)
+                {
+                    if (fifoN >= B * 2) Late++; else CableGap++;
+                    Events.Enqueue(string.Format("{0}: loop away {1:0.0} ms, VSX took {2:0.0} ms, {3:0.0} ms was queued, {4:0.0} ms waiting",
+                        fifoN >= B * 2 ? "late" : "cable gap", Ms(gap), Ms(lastProc), lastPad * 1000.0 / rate, fifoN / 2 * 1000.0 / rate));
+                }
+                lastProc = 0;
                 while (fifoN >= B * 2 && pad + B <= renSize && pad < target + B)
                 {
                     for (int i = 0; i < B; i++) { l[i] = fifo[i * 2]; r[i] = fifo[i * 2 + 1]; }
                     Buffer.BlockCopy(fifo, B * 2 * 4, fifo, 0, (fifoN - B * 2) * 4); fifoN -= B * 2;
                     Marshal.Copy(l, 0, inL, B); Marshal.Copy(r, 0, inR, B);
+                    long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                     vst.Process(ins, outs, B);
+                    lastProc += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
                     Marshal.Copy(outL, l, 0, B); Marshal.Copy(outR, r, 0, B);
-                    IntPtr buf; renC.GetBuffer((uint)B, out buf);
+                    IntPtr buf; Ok(renC.GetBuffer((uint)B, out buf), "output");
                     for (int i = 0; i < B; i++) for (int c = 0; c < renCh; c++) WriteF(buf, i * renCh + c, c == 0 ? l[i] : c == 1 ? r[i] : 0f);
-                    renC.ReleaseBuffer((uint)B, 0);
+                    Ok(renC.ReleaseBuffer((uint)B, 0), "output");
                     pad += B; playing = true;
                 }
                 lastPad = pad;
@@ -307,14 +322,18 @@ sealed class Engine : IDisposable
                     Buffer.BlockCopy(fifo, (fifoN - keep) * 4, fifo, 0, keep * 4); fifoN = keep; Resync++;
                 }
             }
-            ren.Stop(); cap.Stop();
         }
         catch (Exception ex) { Error = ex.Message; }
     }
     static unsafe float ReadF(IntPtr p, int i) { return ((float*)p)[i]; }
     static unsafe void WriteF(IntPtr p, int i, float v) { ((float*)p)[i] = v; }
 
-    public void Dispose() { run = false; thread.Join(1000); cap.Stop(); ren.Stop(); Marshal.ReleaseComObject(cap); Marshal.ReleaseComObject(ren); }
+    public void Dispose()
+    {
+        run = false; thread.Join(1000);
+        try { cap.Stop(); ren.Stop(); } catch (Exception) { }   // the device may be gone
+        Marshal.ReleaseComObject(cap); Marshal.ReleaseComObject(ren);
+    }
 }
 
 // ---------------------------------------------------------------- window, tray, deck key pictures
@@ -338,6 +357,7 @@ sealed class MainForm : Form
         FlatStyle = FlatStyle.Flat, ForeColor = Muted, Cursor = Cursors.Hand, TabStop = false
     };
     string infoText = ""; int shownGlitches;
+    int retryAt = -1;   // audio failed (device off/unplugged): reconnect when due
     SettingsForm settings;
     readonly System.Windows.Forms.Timer idle = new System.Windows.Forms.Timer { Interval = 30 };
     bool exiting;
@@ -365,7 +385,14 @@ sealed class MainForm : Form
         idle.Tick += (s, e) =>
         {
             vst.EditorIdle();
-            if (engine != null && engine.Error != null) { SetInfo("Audio stopped: " + engine.Error, true); engine.Dispose(); engine = null; }
+            if (engine != null && engine.Error != null)
+            {
+                string why = engine.Error;
+                Program.Log("audio stopped: " + why);
+                engine.Dispose(); engine = null; retryAt = Environment.TickCount + 2000;
+                SetInfo("Audio stopped (" + why + "), reconnecting…", true);
+            }
+            if (engine == null && retryAt != -1 && Environment.TickCount - retryAt >= 0) RestartAudio();
             ShowGlitches();
             WatchStatus();
             CaptureSlotPictureWhenDue();
@@ -386,18 +413,18 @@ sealed class MainForm : Form
     public void RestartAudio()
     {
         if (engine != null) engine.Dispose();
-        engine = null; shownGlitches = -1;
-        try { engine = new Engine(VstFor); SetInfo(engine.Info, false); }
-        catch (Exception ex) { SetInfo("Audio stopped: " + ex.Message, true); }
+        engine = null; shownGlitches = -1; retryAt = -1;
+        try { engine = new Engine(VstFor); SetInfo(engine.Info, false); Program.Log("audio: " + engine.Info); }
+        catch (Exception ex) { retryAt = Environment.TickCount + 2000; SetInfo("Waiting for audio: " + ex.Message, true); }
     }
     void SetInfo(string text, bool error) { infoText = text; info.Text = text; info.ForeColor = error ? Warn : Muted; }
     void ShowGlitches()   // crackle check: dropouts since the audio connection started
     {
-        if (engine == null || engine.Glitches == shownGlitches) return;
+        if (engine == null) return;
+        string ev; while (engine.Events.TryDequeue(out ev)) Program.Log(ev);
+        if (engine.Glitches == shownGlitches) return;
         shownGlitches = engine.Glitches;
-        if (shownGlitches == 0) { info.Text = infoText; return; }
-        info.Text = string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches);
-        Program.Log(string.Format("dropouts: late {0}, cable gap {1}, cable discontinuity {2}, resync {3}", engine.Late, engine.CableGap, engine.Discontinuity, engine.Resync));
+        info.Text = shownGlitches == 0 ? infoText : string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches);
     }
     void OpenSettings()
     {
