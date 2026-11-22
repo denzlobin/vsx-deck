@@ -1,0 +1,10 @@
+# build leftovers (bin\ itself is committed: ready-built for Install.ps1)
+*.obj
+*.lib
+*.exp
+*.pdb
+*.tmp
+# generated per user from their own VSX; never commit
+*.vsx
+*.png
+!com.vsxdeck.sdPlugin/icon*.png

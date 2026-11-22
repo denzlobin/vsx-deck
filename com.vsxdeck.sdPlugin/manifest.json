@@ -1,0 +1,48 @@
+{
+  "Name": "VSX Deck",
+  "Author": "VSX Deck",
+  "Description": "Slate VSX from the Stream Deck: ON/OFF, room slots, Save and level-matched Bypass. Keys show what the live VSX applied.",
+  "Version": "2.0.0.0",
+  "SDKVersion": 2,
+  "CodePath": "plugin.js",
+  "Nodejs": { "Version": "20", "Debug": "disabled" },
+  "Icon": "icon",
+  "Category": "VSX Deck",
+  "CategoryIcon": "icon",
+  "OS": [ { "Platform": "windows", "MinimumVersion": "10" } ],
+  "Software": { "MinimumVersion": "6.4" },
+  "Actions": [
+    {
+      "UUID": "com.vsxdeck.onoff",
+      "Name": "VSX On/Off",
+      "Tooltip": "Toggle VSX. Amber outline = not confirmed by a running VSX.",
+      "Icon": "icon",
+      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.vsxdeck.slot",
+      "Name": "VSX Slot",
+      "Tooltip": "Load a room slot (green = active). Hold 1.5 s to clear. Slot number: settings.slot (set by the installer).",
+      "Icon": "icon",
+      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.vsxdeck.bypass",
+      "Name": "VSX Bypass",
+      "Tooltip": "VSX's own level-matched bypass (VSX keeps running). Amber = bypassed.",
+      "Icon": "icon",
+      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "SupportedInMultiActions": false
+    },
+    {
+      "UUID": "com.vsxdeck.save",
+      "Name": "VSX Save",
+      "Tooltip": "Save the open VSX window's settings into the selected slot.",
+      "Icon": "icon",
+      "States": [ { "Image": "icon", "ShowTitle": false } ],
+      "SupportedInMultiActions": false
+    }
+  ]
+}
