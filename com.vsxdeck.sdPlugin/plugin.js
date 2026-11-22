@@ -1,9 +1,10 @@
 // VSX Deck: Stream Deck keys (plain Node 20, no packages; Stream Deck's WebSocket is spoken by the tiny client below).
 // They write the deck state in %LOCALAPPDATA%\VSX Deck\, which every VSX Deck Holder instance applies to its VSX.
 //  - On/Off : shows what the LIVE VSX applied (status.txt) and toggles: ON = last chosen slot, OFF = dry.
-//  - Slot N : shows slot N's room (picture if VSX Deck made one), green while active. Press = load it
-//             (an empty slot becomes the Save target). Hold 1.5 s = clear it (recoverable).
-//  - Save   : stores the open VSX window's settings into the selected slot (save.req).
+//  - Preset N : shows preset N's room (picture if VSX Deck made one), green while active. Press = load it
+//               (an empty preset becomes the Save target). Hold 1.5 s = clear it (recoverable).
+//               A newly added key takes the next free number (highest in use + 1), empty.
+//  - Save   : stores the open VSX window's settings into the selected preset (save.req).
 //  - Bypass : VSX's own level-matched bypass (bypass.txt).
 // Run without Stream Deck args (`node plugin.js`) to execute the self-check.
 'use strict';
@@ -41,6 +42,13 @@ function selectSlot(n) {                             // an empty slot only becom
   return isChunk(preset) ? 'loaded' : 'empty';
 }
 function requestSave() { const n = lastSlot(); fs.writeFileSync(f('save.req'), String(n)); return n; }
+// Number for a newly added preset key: one past the highest used by a key or a saved preset.
+const MAX_PRESET = 99;
+function nextPreset(keyNumbers) {
+  let files = [];
+  try { files = fs.readdirSync(DIR).map((n) => +((n.match(/^slot(\d+)\.vsx$/) || [])[1] || 0)); } catch {}
+  return Math.min(MAX_PRESET, Math.max(0, ...keyNumbers, ...files) + 1);
+}
 // Hold a slot key to clear it. Recoverable: the preset moves to cleared\slotN-<time>.vsx. Audio keeps playing
 // whatever is active; the cleared slot becomes the Save target.
 function clearSlot(n) {
@@ -113,7 +121,7 @@ function slotImage(n) {
 }
 function saveImage() {
   const n = lastSlot(), room = roomOf(read(`slot${n}.vsx`));
-  return key({ bg: '#23395d', fg: '#fff', top: 'SAVE', big: `→ ${n}`, bigSize: 34, sub: room || 'empty slot' });
+  return key({ bg: '#23395d', fg: '#fff', top: 'SAVE', big: `→ ${n}`, bigSize: 34, sub: room || 'empty preset' });
 }
 
 // ---- minimal WebSocket client (text frames, client-masked) -------------------------------------
@@ -186,7 +194,12 @@ function main() {
     const m = JSON.parse(text);
     if (m.event === 'willAppear') {
       const s = (m.payload && m.payload.settings) || {};
-      keys.set(m.context, { action: m.action, slot: Math.min(10, Math.max(1, parseInt(s.slot, 10) || 1)), last: '' });
+      let slot = parseInt(s.slot, 10);
+      if (m.action === ACT + 'slot' && !(slot >= 1)) {      // freshly added preset key: next number, stored on it
+        slot = nextPreset([...keys.values()].filter((k) => k.action === ACT + 'slot').map((k) => k.slot));
+        sendJson({ event: 'setSettings', context: m.context, payload: { slot } });
+      }
+      keys.set(m.context, { action: m.action, slot: Math.min(MAX_PRESET, Math.max(1, slot || 1)), last: '' });
       paint(true);
     } else if (m.event === 'willDisappear') keys.delete(m.context);
     else if (m.event === 'keyDown') {
@@ -253,6 +266,10 @@ function selfTest() {
   assert.ok(Buffer.from(m.onOffImage().split(',')[1], 'base64').toString().includes('BYPASSED'), 'ON key says bypassed');
   m.toggleBypass(); assert.strictEqual(m.bypassWanted(), false, 'bypass toggles off');
   assert.strictEqual(m.selectSlot(10), 'empty', 'slot 10 works'); assert.strictEqual(m.lastSlot(), 10);
+  assert.strictEqual(m.nextPreset([1, 2, 3, 4, 5, 6, 7]), 8, 'with 7 keys, the new one is 8');
+  assert.strictEqual(m.nextPreset([]), 5, 'no keys: one past the highest saved preset (slot4.vsx)');
+  assert.strictEqual(m.nextPreset([1, 2, 12]), 13, 'gaps are not refilled: highest + 1');
+  assert.strictEqual(m.nextPreset([99]), 99, 'capped at 99');
   for (const img of [m.onOffImage(), m.slotImage(1), m.slotImage(3), m.saveImage(), m.bypassImage()]) assert.ok(img.startsWith('data:image/svg+xml;base64,'));
   const later = new Date(Date.now() + 5000);
   fs.writeFileSync(path.join(dir, 'slot1.png'), 'PNG1'); fs.utimesSync(path.join(dir, 'slot1.png'), later, later);
@@ -276,5 +293,5 @@ function selfTest() {
 }
 
 module.exports = { wanted, applied, toggle, selectSlot, requestSave, lastSlot, roomOf, view, onOffImage, slotImage, saveImage,
-  bypassWanted, toggleBypass, bypassImage, clearSlot };
+  bypassWanted, toggleBypass, bypassImage, clearSlot, nextPreset };
 if (require.main === module) process.argv.includes('-port') ? main() : selfTest();

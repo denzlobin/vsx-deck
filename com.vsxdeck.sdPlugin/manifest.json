@@ -1,8 +1,8 @@
 {
   "Name": "VSX Deck",
   "Author": "VSX Deck",
-  "Description": "Slate VSX from the Stream Deck: ON/OFF, room slots, Save and level-matched Bypass. Keys show what the live VSX applied.",
-  "Version": "2.0.0.0",
+  "Description": "Slate VSX from the Stream Deck: ON/OFF, presets, Save and level-matched Bypass. Keys show what the live VSX applied.",
+  "Version": "2.1.0.0",
   "SDKVersion": 2,
   "CodePath": "plugin.js",
   "Nodejs": { "Version": "20", "Debug": "disabled" },
@@ -22,8 +22,8 @@
     },
     {
       "UUID": "com.vsxdeck.slot",
-      "Name": "VSX Slot",
-      "Tooltip": "Load a room slot (green = active). Hold 1.5 s to clear. Slot number: settings.slot (set by the installer).",
+      "Name": "VSX Preset",
+      "Tooltip": "Load a VSX preset (green = active). Hold 1.5 s to clear. A newly added key takes the next free number, empty and ready for Save.",
       "Icon": "icon",
       "States": [ { "Image": "icon", "ShowTitle": false } ],
       "SupportedInMultiActions": false

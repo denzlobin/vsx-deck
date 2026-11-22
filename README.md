@@ -3,8 +3,8 @@
 Control **Slate VSX** headphone correction from an **Elgato Stream Deck**, for all system audio and in your DAW:
 
 - **VSX ON/OFF**: green = on (with the room name), grey = off. One key, showing what the live VSX actually does.
-- **Room slots 1–10**: switch rooms instantly; the active slot is green and shows the room's picture.
-- **Save**: store what you dialed in the VSX window into the selected slot.
+- **VSX Preset keys** (10 to start, up to 99): switch rooms instantly; the active one is green and shows the room's picture.
+- **Save**: store what you dialed in the VSX window into the selected preset.
 - **Bypass**: VSX's own level-matched bypass, for A/B.
 - **VSX Deck** tray app: VSX's own window with live meters, following the deck.
 
@@ -30,26 +30,28 @@ deck ─► %LOCALAPPDATA%\VSX Deck\ ─► every VSX Deck Holder applies it to 
 4. DAW (optional): rescan VST plugins and put **VSX Deck Holder** where VSX was, e.g. Reaper's
    View → Monitoring FX. Monitoring over ASIO bypasses VB-Cable, so DAW audio is never processed twice.
 
-Profile layout (5×3 deck): rows 1–2 = slots 1–10; bottom row = Bypass (left), Save, VSX ON/OFF (right).
+Profile layout (5×3 deck): rows 1–2 = presets 1–10; bottom row = Bypass (left), Save, VSX ON/OFF (right).
+**More presets**: drag **VSX Preset** (VSX Deck category) onto any key. It takes the next number (highest in use + 1)
+and starts empty, ready for Save.
 
 ## Use
 
-- **Switch rooms** with the slot keys. Everything running VSX Deck Holder follows: the VSX Deck app and your DAW.
-- **New preset**: press an empty slot (blue outline, "save here"; audio stays as is), dial the room in a VSX
+- **Switch rooms** with the preset keys. Everything running VSX Deck Holder follows: the VSX Deck app and your DAW.
+- **New preset**: press an empty preset key (blue outline, "save here"; audio stays as is), dial the room in a VSX
   window, press **Save**. The key flashes ✓ (⚠ if no VSX window is open).
   **Update one**: select it, tweak, **Save**. If two VSX windows are open (app and DAW), close the one you aren't
   tweaking; the last to save wins.
-- **Clear a preset**: hold its slot key for 1.5 s. Recoverable: it moves to `%LOCALAPPDATA%\VSX Deck\cleared\`
-  (copy it back as `slotN.vsx`). Slot keys act on release, so a short press still selects.
-- **ON** returns to the last slot used (slot 1 if that one is empty). OFF is a 30 ms fade to dry; VSX keeps running.
-- **Bypass** stays on across room switches and is never saved into a slot.
+- **Clear a preset**: hold its key for 1.5 s. Recoverable: it moves to `%LOCALAPPDATA%\VSX Deck\cleared\`
+  (copy it back as `slotN.vsx`). Preset keys act on release, so a short press still selects.
+- **ON** returns to the last preset used (preset 1 if that one is empty). OFF is a 30 ms fade to dry; VSX keeps running.
+- **Bypass** stays on across room switches and is never saved into a preset.
 - **Amber dashed outline** on ON/OFF or Bypass = not confirmed by a running VSX (the VSX Deck app isn't running).
 - **Tray icon**: Show VSX / Exit. Closing the window only hides it.
 - Latency of the system-audio path: roughly 20–40 ms. Fine for music and video, noticeable in games.
 
-### Room pictures on slot keys
+### Room pictures on preset keys
 
-When the VSX Deck window is visible and settles on a slot, it saves a small thumbnail of the room picture VSX is
+When the VSX Deck window is visible and settles on a preset, it saves a small thumbnail of the room picture VSX is
 showing (`slotN.png`, `slotN-active.png` in `%LOCALAPPDATA%\VSX Deck`). They are made on your PC from **your own
 licensed VSX, for your own deck**. The artwork is Slate's: this repository contains none, and don't share the
 generated files.

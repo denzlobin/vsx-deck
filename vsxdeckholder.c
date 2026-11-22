@@ -185,7 +185,7 @@ static void pollSave(Hold *h) {
     DWORD n = 0; char *b = readFile(L"save.req", &n);
     int slot = b ? atoi(b) : 0;
     free(b);
-    char *s = slot >= 1 && slot <= 10 ? liveState(h, &n) : NULL;
+    char *s = slot >= 1 && slot <= 99 ? liveState(h, &n) : NULL;
     if (!s) return;
     int live = isBypassed(s, n);
     setBypass(s, n, 0);                                 /* presets are stored un-bypassed */
