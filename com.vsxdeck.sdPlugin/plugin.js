@@ -4,7 +4,7 @@
 //  - Preset N : shows preset N's room (picture if VSX Deck made one), green while active. Press = load it
 //               (an empty preset becomes the Save target). Hold 1.5 s = clear it (recoverable).
 //               A newly added key takes the next free number (highest in use + 1), empty.
-//  - Save   : stores the open VSX window's settings into the selected preset (save.req).
+//  - Save   : hold 1 s (a bar fills) = store the open VSX window's settings into the selected preset (save.req).
 //  - Bypass : VSX's own level-matched bypass (bypass.txt).
 //  - App    : starts VSX Deck, or brings its window to the front if it is running (the app handles that).
 // Run without Stream Deck args (`node plugin.js`) to execute the self-check.
@@ -78,8 +78,8 @@ function twoLines(text, width) {
 // Palette ("B · Deck", green): charcoal keys, green = on/active, purple = bypassed.
 const C = { tile: '#17181c', key: '#1f2024', dim: '#8e8f96', light: '#f4f3f1', green: '#35d07f', track: '#3d4049',
             purple: '#4a3b8c', save: '#2b2c31', off: '#1b1c20', faint: '#55565c' };
-function key({ bg, fg, top = '', bar = '', big, bigSize = 38, sub = '', dashed = false, outline = '' }) {
-  const [a, b] = twoLines(sub, 12);
+function key({ bg, fg, top = '', bar = '', big, bigSize = 38, sub = '', dashed = false, outline = '', progress = -1 }) {
+  const [a, b] = progress >= 0 ? ['', ''] : twoLines(sub, 12);   // a hold in progress shows its bar instead of the text
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
 <rect width="144" height="144" rx="18" fill="${bg}"/>
 ${dashed ? '<rect x="6" y="6" width="132" height="132" rx="14" fill="none" stroke="#f0b429" stroke-width="5" stroke-dasharray="12 8"/>' : ''}
@@ -89,6 +89,8 @@ ${bar ? `<rect x="44" y="26" width="56" height="12" rx="6" fill="${bar}"/>` : ''
 <text x="72" y="86" font-family="Segoe UI,Arial" font-size="${bigSize}" font-weight="700" fill="${fg}" text-anchor="middle">${esc(big)}</text>
 <text x="72" y="112" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(a)}</text>
 <text x="72" y="130" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(b)}</text>
+${progress >= 0 ? `<rect x="20" y="108" width="104" height="14" rx="7" fill="${C.track}"/>
+<rect x="20" y="108" width="${Math.round(14 + 90 * Math.min(1, progress))}" height="14" rx="7" fill="${C.green}"/>` : ''}
 </svg>`;
   return 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
 }
@@ -134,9 +136,9 @@ function slotImage(n) {
     ? key({ bg: C.tile, fg: C.light, top: 'PRESET', big: String(n), sub: room, outline: C.green })
     : key({ bg: C.key, fg: '#cfcfcf', top: 'PRESET', big: String(n), sub: room });
 }
-function saveImage() {
+function saveImage(progress = -1) {   // progress 0..1 while the key is held
   const n = lastSlot(), room = roomOf(read(`slot${n}.vsx`));
-  return key({ bg: C.save, fg: C.light, top: 'SAVE', big: `→ ${n}`, bigSize: 34, sub: room || 'empty preset' });
+  return key({ bg: C.save, fg: C.light, top: 'SAVE', big: `→ ${n}`, bigSize: 34, sub: room || 'empty preset', progress });
 }
 
 // ---- minimal WebSocket client (text frames, client-masked) -------------------------------------
@@ -178,11 +180,13 @@ function ws(port, onOpen, onText) {
 // ---- plugin -------------------------------------------------------------------------------------
 const ACT = 'com.vsxdeck.';
 const HOLD_MS = 1500;   // hold a slot key this long to clear it
+const SAVE_HOLD_MS = 1000;   // hold Save this long to save (an accidental tap overwrites nothing)
 function main() {
   const arg = (k) => process.argv[process.argv.indexOf(k) + 1];
   const keys = new Map(); // context -> { action, slot, last }
   let sendJson = () => {};
-  const image = (k) => k.action === ACT + 'onoff' ? onOffImage() : k.action === ACT + 'save' ? saveImage()
+  const image = (k) => k.action === ACT + 'onoff' ? onOffImage()
+    : k.action === ACT + 'save' ? saveImage(k.t0 ? (Date.now() - k.t0) / SAVE_HOLD_MS : -1)
     : k.action === ACT + 'bypass' ? bypassImage() : k.action === ACT + 'app' ? null : slotImage(k.slot);
   const paint = (force) => {
     for (const [context, k] of keys) {
@@ -216,14 +220,24 @@ function main() {
       }
       keys.set(m.context, { action: m.action, slot: Math.min(MAX_PRESET, Math.max(1, slot || 1)), last: '' });
       paint(true);
-    } else if (m.event === 'willDisappear') keys.delete(m.context);
+    } else if (m.event === 'willDisappear') { const k = keys.get(m.context); if (k) clearTimeout(k.hold); keys.delete(m.context); }
     else if (m.event === 'keyDown') {
       const k = keys.get(m.context); if (!k) return;
       try {
         if (k.action === ACT + 'onoff') toggle();
         else if (k.action === ACT + 'bypass') toggleBypass();
         else if (k.action === ACT + 'app') { if (!openApp()) sendJson({ event: 'showAlert', context: m.context }); }
-        else if (k.action === ACT + 'save') { const n = lastSlot(), before = mtime(`slot${n}.vsx`); requestSave(); confirmSave(m.context, n, before); }
+        else if (k.action === ACT + 'save') {     // hold: the bar fills, saves when full; release early = nothing
+          k.t0 = Date.now();
+          k.hold = setInterval(() => {
+            if (Date.now() - k.t0 < SAVE_HOLD_MS) return paint(false);
+            clearInterval(k.hold); k.t0 = 0;
+            try { const n = lastSlot(), before = mtime(`slot${n}.vsx`); requestSave(); confirmSave(m.context, n, before); }
+            catch { sendJson({ event: 'showAlert', context: m.context }); }
+            paint(false);
+          }, 50);
+          return paint(false);
+        }
         else {                                   // slot: short press selects (on release), hold clears
           k.held = false;
           k.hold = setTimeout(() => {
@@ -237,7 +251,9 @@ function main() {
       } catch { sendJson({ event: 'showAlert', context: m.context }); }
       setTimeout(() => paint(true), 150);
     } else if (m.event === 'keyUp') {
-      const k = keys.get(m.context); if (!k || k.action !== ACT + 'slot') return;
+      const k = keys.get(m.context); if (!k) return;
+      if (k.action === ACT + 'save') { clearInterval(k.hold); k.t0 = 0; return paint(false); }
+      if (k.action !== ACT + 'slot') return;
       clearTimeout(k.hold);
       if (k.held) return;
       try { selectSlot(k.slot); } catch { sendJson({ event: 'showAlert', context: m.context }); }
@@ -288,6 +304,10 @@ function selfTest() {
   assert.strictEqual(m.nextPreset([99]), 99, 'capped at 99');
   assert.strictEqual(m.openApp(), false, 'app key: no VSXDeck.exe -> false (key shows an alert)');
   for (const img of [m.onOffImage(), m.slotImage(1), m.slotImage(3), m.saveImage(), m.bypassImage()]) assert.ok(img.startsWith('data:image/svg+xml;base64,'));
+  const svg = (img) => Buffer.from(img.split(',')[1], 'base64').toString();
+  assert.ok(!svg(m.saveImage()).includes('width="104"'), 'save key at rest: no bar');
+  assert.ok(svg(m.saveImage(0.5)).includes('width="59"'), 'save key half held: bar half full');
+  assert.ok(svg(m.saveImage(2)).includes('width="104" height="14" rx="7" fill="#35d07f"'), 'bar stops at full'); 
   const later = new Date(Date.now() + 5000);
   fs.writeFileSync(path.join(dir, 'slot1.png'), 'PNG1'); fs.utimesSync(path.join(dir, 'slot1.png'), later, later);
   fs.writeFileSync(path.join(dir, 'slot1-active.png'), 'PNG1A'); fs.utimesSync(path.join(dir, 'slot1-active.png'), later, later);

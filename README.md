@@ -6,7 +6,7 @@ Control **Slate VSX** headphone correction from an **Elgato Stream Deck**, for a
 
 - **VSX ON/OFF**: green = on (with the room name), grey = off. One key, showing what the live VSX actually does.
 - **VSX Preset keys** (10 to start, up to 99): switch rooms instantly; the active one is green and shows the room's picture.
-- **Save**: store what you dialed in the VSX window into the selected preset.
+- **Save**: hold for 1 s (a bar fills) to store what you dialed in the VSX window into the selected preset. A tap does nothing.
 - **Bypass**: VSX's own level-matched bypass, for A/B.
 - **VSX Deck** tray app: VSX's own window with live meters, following the deck.
 
@@ -41,8 +41,8 @@ and starts empty, ready for Save.
 
 - **Switch rooms** with the preset keys. Everything running VSX Deck Holder follows: the VSX Deck app and your DAW.
 - **New preset**: press an empty preset key (blue outline, "save here"; audio stays as is), dial the room in a VSX
-  window, press **Save**. The key flashes ✓ (⚠ if no VSX window is open).
-  **Update one**: select it, tweak, **Save**. If two VSX windows are open (app and DAW), close the one you aren't
+  window, hold **Save**. The key flashes ✓ (⚠ if no VSX window is open).
+  **Update one**: select it, tweak, hold **Save**. If two VSX windows are open (app and DAW), close the one you aren't
   tweaking; the last to save wins.
 - **Clear a preset**: hold its key for 1.5 s. Recoverable: it moves to `%LOCALAPPDATA%\VSX Deck\cleared\`
   (copy it back as `slotN.vsx`). Preset keys act on release, so a short press still selects.
