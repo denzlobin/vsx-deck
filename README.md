@@ -88,3 +88,9 @@ Only your account can write it, so no other user can feed settings to your VSX.
 Tray → Exit. Remove VSX Deck Holder from your DAW and delete `C:\Program Files\VstPlugins\VSX Deck Holder.dll`.
 Delete `%LOCALAPPDATA%\VSX Deck` and `shell:startup\VSX Deck.lnk`; remove the VSX Deck profile and plugin in the
 Stream Deck app. Uninstall VB-Cable (Apps) and set the default output back to your interface.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Covers this kit's code and artwork only. VSX, VB-Cable, Reaper and Stream Deck are
+their owners' products under their own licenses; VSX Deck is an independent project, not affiliated with or
+endorsed by Slate Digital or Steven Slate Audio.
