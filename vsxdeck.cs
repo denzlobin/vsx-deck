@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.2.3")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.2.3")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.2.4")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.2.4")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -52,7 +52,8 @@ static class Cfg
         File.WriteAllLines(Ini, lines);
     }
     public static readonly string[] LatencyNames = { "low", "normal", "safe" };
-    public static int LatencyMs { get { switch (Get("latency", "normal")) { case "low": return 10; case "safe": return 40; default: return 20; } } }
+    // Cable and output both move audio 10 ms at a time: a cushion under ~25 ms can run dry.
+    public static int LatencyMs { get { switch (Get("latency", "normal")) { case "low": return 20; case "safe": return 50; default: return 30; } } }
     public static bool Pictures { get { return Get("pictures", "1") != "0"; } }
 
     // Start at login = a shortcut in the user's Startup folder (the installer makes the same one).
@@ -269,8 +270,12 @@ sealed class Engine : IDisposable
             Marshal.WriteIntPtr(ins, 0, inL); Marshal.WriteIntPtr(ins, 8, inR); Marshal.WriteIntPtr(outs, 0, outL); Marshal.WriteIntPtr(outs, 8, outR);
             var l = new float[B]; var r = new float[B];
             cap.Start(); ren.Start();
-            bool playing = false; uint lastPad = 0;
+            // Jitter buffer: play only once a full latency's worth is in hand (queued at the output + waiting), and
+            // after running dry collect it again. Without this the cushion was whatever happened to be waiting at
+            // start (often 10 ms = one output period) and every late cable packet cracked.
+            bool playing = false, primed = false; uint lastPad = 0;
             long prev = System.Diagnostics.Stopwatch.GetTimestamp(), lastProc = 0;
+            int cushionMin = int.MaxValue, cushionMax = 0, cushionAt = Environment.TickCount + 30000;
             while (run)
             {
                 Thread.Sleep(1);                                               // ~1 ms with timeBeginPeriod(1), see Program
@@ -297,11 +302,13 @@ sealed class Engine : IDisposable
                 if (playing && pad == 0 && lastPad > 0)
                 {
                     if (fifoN >= B * 2) Late++; else CableGap++;
+                    primed = false;
                     Events.Enqueue(string.Format("{0}: loop away {1:0.0} ms, VSX took {2:0.0} ms, {3:0.0} ms was queued, {4:0.0} ms waiting",
                         fifoN >= B * 2 ? "late" : "cable gap", Ms(gap), Ms(lastProc), lastPad * 1000.0 / rate, fifoN / 2 * 1000.0 / rate));
                 }
                 lastProc = 0;
-                while (fifoN >= B * 2 && pad + B <= renSize && pad < target + B)
+                if (!primed && pad + fifoN / 2 >= target) primed = true;
+                while (primed && fifoN >= B * 2 && pad + B <= renSize && pad < target + B)
                 {
                     for (int i = 0; i < B; i++) { l[i] = fifo[i * 2]; r[i] = fifo[i * 2 + 1]; }
                     Buffer.BlockCopy(fifo, B * 2 * 4, fifo, 0, (fifoN - B * 2) * 4); fifoN -= B * 2;
@@ -316,6 +323,16 @@ sealed class Engine : IDisposable
                     pad += B; playing = true;
                 }
                 lastPad = pad;
+                if (playing)   // cushion over 30 s: a steady fall or rise means the cable and output clocks drift
+                {
+                    int c = (int)pad + fifoN / 2;
+                    cushionMin = Math.Min(cushionMin, c); cushionMax = Math.Max(cushionMax, c);
+                    if (Environment.TickCount - cushionAt >= 0)
+                    {
+                        Events.Enqueue(string.Format("cushion over 30 s: {0:0.0} to {1:0.0} ms", cushionMin * 1000.0 / rate, cushionMax * 1000.0 / rate));
+                        cushionMin = int.MaxValue; cushionMax = 0; cushionAt = Environment.TickCount + 30000;
+                    }
+                }
                 if (fifoN > rate / 5 * 2)                                      // >200 ms backlog (clock drift): keep the newest
                 {
                     int keep = target * 2;
@@ -567,7 +584,7 @@ sealed class SettingsForm : Form
         output.SelectedIndex = Array.FindIndex(outputs, n => n.IndexOf(Cfg.RenderName, StringComparison.OrdinalIgnoreCase) >= 0);
         output.SelectedIndexChanged += (s, e) => { Cfg.RenderName = (string)output.SelectedItem; main.RestartAudio(); };
         Row("Output", output);
-        var latency = Combo(new[] { "Low (10 ms)", "Normal (20 ms)", "Safe (40 ms)" });
+        var latency = Combo(new[] { "Low (20 ms)", "Normal (30 ms)", "Safe (50 ms)" });
         latency.SelectedIndex = Math.Max(0, Array.IndexOf(Cfg.LatencyNames, Cfg.Get("latency", "normal")));
         latency.SelectedIndexChanged += (s, e) => { Cfg.Set("latency", Cfg.LatencyNames[latency.SelectedIndex]); main.RestartAudio(); };
         Row("Latency", latency);

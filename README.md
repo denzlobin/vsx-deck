@@ -50,13 +50,13 @@ and starts empty, ready for Save.
 - **Bypass** stays on across room switches and is never saved into a preset.
 - **Amber dashed outline** on ON/OFF or Bypass = not confirmed by a running VSX (the VSX Deck app isn't running).
 - **Tray icon**: Show VSX / Settings… / Exit. Closing the window only hides it.
-- Latency of the system-audio path: roughly 20–40 ms. Fine for music and video, noticeable in games.
+- Latency of the system-audio path: about 30 ms (Settings: 20 / 30 / 50). Fine for music and video, noticeable in games.
 - **Dropouts** in the header (e.g. "dropouts 3") count moments the output ran dry since the audio connection
   started; details go to `vsxdeck.log`. If you hear crackles and the number climbs, raise **Latency** in Settings.
 
 ### Settings (gear in the header, or tray → Settings…)
 
-- **Output** device and **Latency** (10 / 20 / 40 ms). Changing either reconnects the audio; VSX stays loaded.
+- **Output** device and **Latency** (20 / 30 / 50 ms). Changing either reconnects the audio; VSX stays loaded.
 - **Start at login** (in the tray).
 - **Room pictures on preset keys** on/off, and **Redraw pictures**.
 - **Presets**: back up to a .zip, restore from one (replaced presets move to `cleared\`), open the presets folder.
