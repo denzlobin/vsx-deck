@@ -44,12 +44,13 @@ and starts empty, ready for Save.
   window, hold **Save**. The key flashes ✓ (⚠ if no VSX window is open).
   **Update one**: select it, tweak, hold **Save**. If two VSX windows are open (app and DAW), close the one you aren't
   tweaking; the last to save wins.
-- **Clear a preset**: hold its key for 1.5 s. Recoverable: it moves to `%LOCALAPPDATA%\VSX Deck\cleared\`
+- **Clear a preset**: hold its key for 1.5 s (a red bar fills). Recoverable: it moves to `%LOCALAPPDATA%\VSX Deck\cleared\`
   (copy it back as `slotN.vsx`). Preset keys act on release, so a short press still selects.
 - **ON** returns to the last preset used (preset 1 if that one is empty). OFF is a 30 ms fade to dry; VSX keeps running.
 - **Bypass** stays on across room switches and is never saved into a preset.
 - **Amber dashed outline** on ON/OFF or Bypass = not confirmed by a running VSX (the VSX Deck app isn't running).
-- **Tray icon**: Show VSX / Settings… / Exit. Closing the window only hides it.
+- **Tray icon**: Show VSX / Settings… / About… / Exit. Closing the window only hides it.
+- **About** (ⓘ in the header): version, license, repo link, and a Ko-fi link if you'd like to support the project.
 - Latency of the system-audio path: about 30 ms (Settings: 20 / 30 / 50). Fine for music and video, noticeable in games.
 - **Dropouts** in the header (e.g. "dropouts 3") count moments the output ran dry since the audio connection
   started; details go to `vsxdeck.log`. If you hear crackles and the number climbs, raise **Latency** in Settings.
@@ -59,7 +60,7 @@ and starts empty, ready for Save.
 - **Output** device and **Latency** (20 / 30 / 50 ms). Changing either reconnects the audio; VSX stays loaded.
 - **Start at login** (in the tray).
 - **Room pictures on preset keys** on/off, and **Redraw pictures**.
-- **Presets**: back up to a .zip, restore from one (replaced presets move to `cleared\`), open the presets folder.
+- **Presets**: open the presets folder (`slotN.vsx` files; copy them to back up or move presets to another PC).
 
 ### Room pictures on preset keys
 

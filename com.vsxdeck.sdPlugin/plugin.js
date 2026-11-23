@@ -2,7 +2,7 @@
 // They write the deck state in %LOCALAPPDATA%\VSX Deck\, which every VSX Deck Holder instance applies to its VSX.
 //  - On/Off : shows what the LIVE VSX applied (status.txt) and toggles: ON = last chosen slot, OFF = dry.
 //  - Preset N : shows preset N's room (picture if VSX Deck made one), green while active. Press = load it
-//               (an empty preset becomes the Save target). Hold 1.5 s = clear it (recoverable).
+//               (an empty preset becomes the Save target). Hold 1.5 s = clear it (recoverable; a red bar fills).
 //               A newly added key takes the next free number (highest in use + 1), empty.
 //  - Save   : hold 1 s (a bar fills) = store the open VSX window's settings into the selected preset (save.req).
 //  - Bypass : VSX's own level-matched bypass (bypass.txt).
@@ -75,10 +75,10 @@ function twoLines(text, width) {
   for (const w of (text || '').split(' ')) ((l1.join(' ') + ' ' + w).length <= width && !l2.length ? l1 : l2).push(w);
   return [l1.join(' '), l2.join(' ').slice(0, width + 2)];
 }
-// Palette ("B · Deck", green): charcoal keys, green = on/active, purple = bypassed.
+// Palette ("B · Deck", green): charcoal keys, green = on/active, purple = bypassed, red = clearing.
 const C = { tile: '#17181c', key: '#1f2024', dim: '#8e8f96', light: '#f4f3f1', green: '#35d07f', track: '#3d4049',
-            purple: '#4a3b8c', save: '#2b2c31', off: '#1b1c20', faint: '#55565c' };
-function key({ bg, fg, top = '', bar = '', big, bigSize = 38, sub = '', dashed = false, outline = '', progress = -1 }) {
+            purple: '#4a3b8c', save: '#2b2c31', off: '#1b1c20', faint: '#55565c', warn: '#ff8a7a' };
+function key({ bg, fg, top = '', bar = '', big, bigSize = 38, sub = '', dashed = false, outline = '', progress = -1, fill = C.green }) {
   const [a, b] = progress >= 0 ? ['', ''] : twoLines(sub, 12);   // a hold in progress shows its bar instead of the text
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
 <rect width="144" height="144" rx="18" fill="${bg}"/>
@@ -90,7 +90,7 @@ ${bar ? `<rect x="44" y="26" width="56" height="12" rx="6" fill="${bar}"/>` : ''
 <text x="72" y="112" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(a)}</text>
 <text x="72" y="130" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(b)}</text>
 ${progress >= 0 ? `<rect x="20" y="108" width="104" height="14" rx="7" fill="${C.track}"/>
-<rect x="20" y="108" width="${Math.round(14 + 90 * Math.min(1, progress))}" height="14" rx="7" fill="${C.green}"/>` : ''}
+<rect x="20" y="108" width="${Math.round(14 + 90 * Math.min(1, progress))}" height="14" rx="7" fill="${fill}"/>` : ''}
 </svg>`;
   return 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
 }
@@ -125,8 +125,9 @@ function pictureKey(n, active) {
   const b = read(png);
   return b ? 'data:image/png;base64,' + b.toString('base64') : null;
 }
-function slotImage(n) {
+function slotImage(n, progress = -1) {   // progress 0..1 while held to clear (a saved preset only)
   const b = read(`slot${n}.vsx`), room = roomOf(b), active = wanted() && lastSlot() === n && !!room;
+  if (room && progress >= 0) return key({ bg: C.key, fg: C.light, top: 'CLEAR', big: String(n), progress, fill: C.warn });
   const pic = room && pictureKey(n, active);
   if (pic) return pic;
   if (!room) return lastSlot() === n
@@ -187,7 +188,8 @@ function main() {
   let sendJson = () => {};
   const image = (k) => k.action === ACT + 'onoff' ? onOffImage()
     : k.action === ACT + 'save' ? saveImage(k.t0 ? (Date.now() - k.t0) / SAVE_HOLD_MS : -1)
-    : k.action === ACT + 'bypass' ? bypassImage() : k.action === ACT + 'app' ? null : slotImage(k.slot);
+    : k.action === ACT + 'bypass' ? bypassImage() : k.action === ACT + 'app' ? null
+    : slotImage(k.slot, k.t0 && Date.now() - k.t0 > 250 ? (Date.now() - k.t0) / HOLD_MS : -1);   // no bar flash on a tap
   const paint = (force) => {
     for (const [context, k] of keys) {
       const img = image(k);                            // null: keep the manifest's image (the app key)
@@ -196,6 +198,16 @@ function main() {
       sendJson({ event: 'setImage', context, payload: { image: img, target: 0 } });
     }
   };
+  // Hold a key: repaint its bar every 50 ms, run done() once held for ms. keyUp before that = endHold.
+  const startHold = (k, ms, done) => {
+    k.t0 = Date.now(); k.held = false;
+    k.hold = setInterval(() => {
+      if (Date.now() - k.t0 < ms) return paint(false);
+      clearInterval(k.hold); k.t0 = 0; k.held = true;
+      done(); paint(true);
+    }, 50);
+  };
+  const endHold = (k) => { clearInterval(k.hold); k.t0 = 0; paint(false); };
   const confirmSave = (context, n, before) => {           // ✓ once the slot file is rewritten, ⚠ otherwise
     const t0 = Date.now();
     const tick = () => {
@@ -220,7 +232,7 @@ function main() {
       }
       keys.set(m.context, { action: m.action, slot: Math.min(MAX_PRESET, Math.max(1, slot || 1)), last: '' });
       paint(true);
-    } else if (m.event === 'willDisappear') { const k = keys.get(m.context); if (k) clearTimeout(k.hold); keys.delete(m.context); }
+    } else if (m.event === 'willDisappear') { const k = keys.get(m.context); if (k) clearInterval(k.hold); keys.delete(m.context); }
     else if (m.event === 'keyDown') {
       const k = keys.get(m.context); if (!k) return;
       try {
@@ -228,34 +240,26 @@ function main() {
         else if (k.action === ACT + 'bypass') toggleBypass();
         else if (k.action === ACT + 'app') { if (!openApp()) sendJson({ event: 'showAlert', context: m.context }); }
         else if (k.action === ACT + 'save') {     // hold: the bar fills, saves when full; release early = nothing
-          k.t0 = Date.now();
-          k.hold = setInterval(() => {
-            if (Date.now() - k.t0 < SAVE_HOLD_MS) return paint(false);
-            clearInterval(k.hold); k.t0 = 0;
+          startHold(k, SAVE_HOLD_MS, () => {
             try { const n = lastSlot(), before = mtime(`slot${n}.vsx`); requestSave(); confirmSave(m.context, n, before); }
             catch { sendJson({ event: 'showAlert', context: m.context }); }
-            paint(false);
-          }, 50);
+          });
           return paint(false);
         }
         else {                                   // slot: short press selects (on release), hold clears
-          k.held = false;
-          k.hold = setTimeout(() => {
-            k.held = true;
+          startHold(k, HOLD_MS, () => {
             try { sendJson({ event: clearSlot(k.slot) ? 'showOk' : 'showAlert', context: m.context }); }
             catch { sendJson({ event: 'showAlert', context: m.context }); }
-            paint(true);
-          }, HOLD_MS);
+          });
           return;
         }
       } catch { sendJson({ event: 'showAlert', context: m.context }); }
       setTimeout(() => paint(true), 150);
     } else if (m.event === 'keyUp') {
       const k = keys.get(m.context); if (!k) return;
-      if (k.action === ACT + 'save') { clearInterval(k.hold); k.t0 = 0; return paint(false); }
-      if (k.action !== ACT + 'slot') return;
-      clearTimeout(k.hold);
-      if (k.held) return;
+      if (k.action !== ACT + 'save' && k.action !== ACT + 'slot') return;
+      const held = k.held; endHold(k);
+      if (held || k.action === ACT + 'save') return;
       try { selectSlot(k.slot); } catch { sendJson({ event: 'showAlert', context: m.context }); }
       setTimeout(() => paint(true), 150);
     }
@@ -307,7 +311,9 @@ function selfTest() {
   const svg = (img) => Buffer.from(img.split(',')[1], 'base64').toString();
   assert.ok(!svg(m.saveImage()).includes('width="104"'), 'save key at rest: no bar');
   assert.ok(svg(m.saveImage(0.5)).includes('width="59"'), 'save key half held: bar half full');
-  assert.ok(svg(m.saveImage(2)).includes('width="104" height="14" rx="7" fill="#35d07f"'), 'bar stops at full'); 
+  assert.ok(svg(m.saveImage(2)).includes('width="104" height="14" rx="7" fill="#35d07f"'), 'bar stops at full');
+  assert.ok(svg(m.slotImage(4, 0.5)).includes('CLEAR') && svg(m.slotImage(4, 0.5)).includes('fill="#ff8a7a"'), 'clearing a preset: red bar');
+  assert.ok(!svg(m.slotImage(3, 0.5)).includes('CLEAR'), 'an empty preset shows no clear bar');
   const later = new Date(Date.now() + 5000);
   fs.writeFileSync(path.join(dir, 'slot1.png'), 'PNG1'); fs.utimesSync(path.join(dir, 'slot1.png'), later, later);
   fs.writeFileSync(path.join(dir, 'slot1-active.png'), 'PNG1A'); fs.utimesSync(path.join(dir, 'slot1-active.png'), later, later);

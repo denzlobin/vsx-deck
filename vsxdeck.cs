@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.2.8")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.2.8")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.2.9")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.2.9")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -349,22 +349,32 @@ sealed class MainForm : Form
 
     Vst vst; Engine engine; readonly Panel editor = new Panel(); readonly NotifyIcon tray = new NotifyIcon();
     // Header strip in the app's charcoal palette: the audio route, muted, and a Settings button.
+    // Layout numbers are written for 100 % scaling; S() converts them to pixels at the screen's scaling.
+    public static readonly float Dpi = DpiNow();
+    static float DpiNow() { using (var g = Graphics.FromHwnd(IntPtr.Zero)) return g.DpiX; }
+    public static int S(int px) { return (int)Math.Round(px * Dpi / 96f); }
+    public static int U(int pixels) { return (int)Math.Round(pixels * 96f / Dpi); }   // pixels -> 100 % units
     public static readonly Color Charcoal = Color.FromArgb(0x17, 0x18, 0x1c), Muted = Color.FromArgb(0xa7, 0xa8, 0xae),
         Key = Color.FromArgb(0x2b, 0x2c, 0x31), Light = Color.FromArgb(0xec, 0xea, 0xe6), Warn = Color.FromArgb(0xff, 0x8a, 0x7a);
-    readonly Panel header = new Panel { Dock = DockStyle.Top, Height = 30, BackColor = Charcoal };
+    readonly Panel header = new Panel { Dock = DockStyle.Top, Height = S(30), BackColor = Charcoal };
     readonly Label info = new Label
     {
-        Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0),
+        Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(12), 0, 0, 0),
         ForeColor = Muted, Font = new Font("Segoe UI", 9f), AutoEllipsis = true
     };
     readonly Button gear = new Button
     {
-        Dock = DockStyle.Right, Width = 40, Text = "", Font = new Font("Segoe MDL2 Assets", 11f),
+        Dock = DockStyle.Right, Width = S(40), Text = "", Font = new Font("Segoe MDL2 Assets", 11f),
+        FlatStyle = FlatStyle.Flat, ForeColor = Muted, Cursor = Cursors.Hand, TabStop = false
+    };
+    readonly Button about = new Button
+    {
+        Dock = DockStyle.Right, Width = S(40), Text = "", Font = new Font("Segoe MDL2 Assets", 11f),
         FlatStyle = FlatStyle.Flat, ForeColor = Muted, Cursor = Cursors.Hand, TabStop = false
     };
     string infoText = ""; int shownGlitches;
     int retryAt = -1;   // audio failed (device off/unplugged): reconnect when due
-    SettingsForm settings;
+    Form settings, aboutBox;
     readonly System.Windows.Forms.Timer idle = new System.Windows.Forms.Timer { Interval = 30 };
     bool exiting;
     DateTime seenStatus; bool watching;
@@ -380,7 +390,10 @@ sealed class MainForm : Form
         gear.FlatAppearance.BorderSize = 0; gear.FlatAppearance.MouseOverBackColor = Key;
         gear.Click += (s, e) => OpenSettings();
         new ToolTip().SetToolTip(gear, "Settings");
-        header.Controls.Add(info); header.Controls.Add(gear);
+        about.FlatAppearance.BorderSize = 0; about.FlatAppearance.MouseOverBackColor = Key;
+        about.Click += (s, e) => OpenAbout();
+        new ToolTip().SetToolTip(about, "About VSX Deck");
+        header.Controls.Add(info); header.Controls.Add(about); header.Controls.Add(gear);   // last added docks rightmost
         Controls.Add(editor); Controls.Add(header);
         engine = new Engine(VstFor);
         SetInfo(engine.Info, false);
@@ -409,6 +422,7 @@ sealed class MainForm : Form
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("Show VSX", null, (s, e) => ShowWindow());
         tray.ContextMenuStrip.Items.Add("Settings…", null, (s, e) => OpenSettings());
+        tray.ContextMenuStrip.Items.Add("About…", null, (s, e) => OpenAbout());
         tray.ContextMenuStrip.Items.Add("Exit", null, (s, e) => { exiting = true; Close(); });
         tray.DoubleClick += (s, e) => ShowWindow();
         if (startHidden) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; Load += (s, e) => Hide(); }
@@ -432,11 +446,13 @@ sealed class MainForm : Form
         shownGlitches = engine.Glitches;
         info.Text = shownGlitches == 0 ? infoText : string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches);
     }
-    void OpenSettings()
+    void OpenSettings() { OpenOnce(ref settings, () => new SettingsForm(this)); }
+    void OpenAbout() { OpenOnce(ref aboutBox, () => new AboutForm(Icon)); }
+    static void OpenOnce(ref Form f, Func<Form> make)   // one at a time; a second request brings it forward
     {
-        if (settings != null) { settings.Activate(); return; }
-        using (settings = new SettingsForm(this)) settings.ShowDialog();
-        settings = null;
+        if (f != null) { f.Activate(); return; }
+        using (f = make()) f.ShowDialog();
+        f = null;
     }
     void ShowWindow()
     {
@@ -556,7 +572,14 @@ sealed class MainForm : Form
 sealed class SettingsForm : Form
 {
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int value, int size);
-    static readonly System.Text.RegularExpressions.Regex PresetName = new System.Text.RegularExpressions.Regex(@"^slot\d+\.vsx$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    // Dark title bar and the app's palette, shared by the dialogs.
+    internal static void ToDpi(Form f) { f.Scale(new SizeF(MainForm.Dpi / 96f, MainForm.Dpi / 96f)); }
+    internal static void Dark(Form f)   // also: lay out in 100 % units, ToDpi() at the end scales it
+    {
+        f.AutoScaleMode = AutoScaleMode.None;
+        f.BackColor = MainForm.Charcoal; f.ForeColor = MainForm.Light; f.Font = new Font("Segoe UI", 9.75f);
+        f.HandleCreated += (s, e) => { int on = 1; DwmSetWindowAttribute(f.Handle, 20, ref on, 4); };
+    }
     const int W = 420;
     int y = 16;
 
@@ -564,8 +587,7 @@ sealed class SettingsForm : Form
     {
         Text = "VSX Deck Settings"; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
         StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false; Icon = main.Icon;
-        BackColor = MainForm.Charcoal; ForeColor = MainForm.Light; Font = new Font("Segoe UI", 9.75f);
-        HandleCreated += (s, e) => { int on = 1; DwmSetWindowAttribute(Handle, 20, ref on, 4); };
+        Dark(this);
 
         Heading("Audio");
         string[] outputs = Wasapi.Names(0).Where(n => n.IndexOf("VB-Audio", StringComparison.OrdinalIgnoreCase) < 0).ToArray();
@@ -590,14 +612,14 @@ sealed class SettingsForm : Form
         Note("Pictures are taken again as you select presets with the VSX window open.");
 
         Heading("Presets");
-        Buttons(Btn("Back up…", (s, e) => Backup()), Btn("Restore…", (s, e) => Restore()),
-                Btn("Open folder", (s, e) => System.Diagnostics.Process.Start("explorer.exe", "\"" + Cfg.AppDir + "\"")));
+        Buttons(Btn("Open folder", (s, e) => System.Diagnostics.Process.Start("explorer.exe", "\"" + Cfg.AppDir + "\"")));
 
         y += 12;
         var close = Btn("Close", (s, e) => Close());
-        close.Location = new Point(W - 16 - close.PreferredSize.Width, y);
+        close.Location = new Point(W - 16 - MainForm.U(close.PreferredSize.Width), y);
         Controls.Add(close); CancelButton = close;
-        ClientSize = new Size(W, y + close.Height + 16);
+        ClientSize = new Size(W, y + MainForm.U(close.Height) + 16);
+        SettingsForm.ToDpi(this);
     }
 
     // ---- layout: one column, top to bottom
@@ -610,7 +632,7 @@ sealed class SettingsForm : Form
     void Row(string label, Control c)
     {
         Controls.Add(new Label { Text = label, Location = new Point(16, y + 4), AutoSize = true });
-        c.Location = new Point(96, y); c.Width = W - 96 - 16; Controls.Add(c); y += c.Height + 8;
+        c.Location = new Point(96, y); c.Width = W - 96 - 16; Controls.Add(c); y += MainForm.U(c.Height) + 8;
     }
     void Note(string text)
     {
@@ -620,8 +642,8 @@ sealed class SettingsForm : Form
     void Buttons(params Button[] buttons)
     {
         int x = 16;
-        foreach (var b in buttons) { b.Location = new Point(x, y); Controls.Add(b); x += b.PreferredSize.Width + 8; }
-        y += buttons[0].Height + 8;
+        foreach (var b in buttons) { b.Location = new Point(x, y); Controls.Add(b); x += MainForm.U(b.PreferredSize.Width) + 8; }
+        y += MainForm.U(buttons[0].Height) + 8;
     }
     static ComboBox Combo(string[] items)
     {
@@ -633,7 +655,7 @@ sealed class SettingsForm : Form
         var c = new CheckBox { Text = text, Checked = on, Location = new Point(16, y), AutoSize = true };
         Controls.Add(c); y += 28; return c;
     }
-    static Button Btn(string text, EventHandler click)
+    internal static Button Btn(string text, EventHandler click)
     {
         var b = new Button { Text = text, AutoSize = true, Height = 30, Padding = new Padding(8, 0, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = MainForm.Key, Cursor = Cursors.Hand };
         b.FlatAppearance.BorderColor = Color.FromArgb(0x3d, 0x40, 0x49); b.Click += click; return b;
@@ -641,70 +663,64 @@ sealed class SettingsForm : Form
 
     // ---- actions
     static void DeletePictures() { foreach (var f in Directory.GetFiles(Cfg.AppDir, "slot*.png")) File.Delete(f); }
+}
 
-    void Backup()
-    {
-        var presets = Directory.GetFiles(Cfg.AppDir, "slot*.vsx").Where(f => PresetName.IsMatch(Path.GetFileName(f))).ToArray();
-        if (presets.Length == 0) { MessageBox.Show(this, "No presets saved yet.", Text); return; }
-        using (var d = new SaveFileDialog { Filter = "VSX Deck presets (*.zip)|*.zip", FileName = "VSX Deck presets " + DateTime.Now.ToString("yyyy-MM-dd") + ".zip" })
-        {
-            if (d.ShowDialog(this) != DialogResult.OK) return;
-            using (var fs = new FileStream(d.FileName, FileMode.Create))
-            using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Create))
-                foreach (var f in presets)
-                {
-                    var bytes = File.ReadAllBytes(f);
-                    using (var e = zip.CreateEntry(Path.GetFileName(f)).Open()) e.Write(bytes, 0, bytes.Length);
-                }
-            MessageBox.Show(this, presets.Length + " presets backed up.", Text);
-        }
-    }
+// ---------------------------------------------------------------- About / Support
+sealed class AboutForm : Form
+{
+    const string RepoUrl = "https://github.com/denzlobin/vsx-deck", SupportUrl = "https://ko-fi.com/dzl0";
+    const int W = 400;
+    int y = 28;
 
-    // Takes only slotN.vsx entries that look like VSX state (1 MB cap, "VC2!" header). Presets it replaces move to
-    // cleared\ like a held key does, so a restore can be undone.
-    void Restore()
+    public AboutForm(Icon icon)
     {
-        var found = new System.Collections.Generic.Dictionary<string, byte[]>();
-        using (var d = new OpenFileDialog { Filter = "VSX Deck presets (*.zip)|*.zip" })
+        Text = "About VSX Deck"; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = MinimizeBox = false;
+        StartPosition = FormStartPosition.CenterScreen; ShowInTaskbar = false; Icon = icon;
+        SettingsForm.Dark(this);
+
+        Line("V S X   D E C K", new Font("Segoe UI", 18f, FontStyle.Bold), MainForm.Light, 4);
+        Line("v" + ((System.Reflection.AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(GetType().Assembly,
+            typeof(System.Reflection.AssemblyInformationalVersionAttribute))).InformationalVersion,new Font("Consolas", 9f), MainForm.Muted, 16);
+        Controls.Add(new Label { BackColor = MainForm.Key, Bounds = new Rectangle((W - 120) / 2, y, 120, 1) }); y += 17;
+        Line("by Denis Zlobin", Font, MainForm.Muted, 2);
+        var repo = new LinkLabel
         {
-            if (d.ShowDialog(this) != DialogResult.OK) return;
-            try
-            {
-                using (var fs = File.OpenRead(d.FileName))
-                using (var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Read))
-                    foreach (var e in zip.Entries)
-                    {
-                        if (!PresetName.IsMatch(e.FullName) || e.Length < 8 || e.Length > 1 << 20) continue;
-                        var bytes = new byte[e.Length]; int n = 0;   // never read past the declared size
-                        using (var st = e.Open()) for (int k; n < bytes.Length && (k = st.Read(bytes, n, bytes.Length - n)) > 0; ) n += k;
-                        if (n == bytes.Length &&System.Text.Encoding.ASCII.GetString(bytes, 0, 4) == "VC2!") found[e.FullName.ToLowerInvariant()] = bytes;
-                    }
-            }
-            catch (InvalidDataException) { }
-        }
-        if (found.Count == 0) { MessageBox.Show(this, "No VSX Deck presets in that file.", Text); return; }
-        int replaced = found.Keys.Count(n => File.Exists(Cfg.Data(n)));
-        string ask = found.Count + " presets to restore." + (replaced > 0 ? "\n" + replaced + " current presets with the same numbers move to the cleared folder." : "");
-        if (MessageBox.Show(this, ask, Text, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
-        string cleared = Cfg.Data("cleared"), stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-        Directory.CreateDirectory(cleared);
-        foreach (var kv in found)
-        {
-            string path = Cfg.Data(kv.Key), slot = Path.GetFileNameWithoutExtension(kv.Key);
-            if (File.Exists(path)) File.Move(path, Path.Combine(cleared, slot + "-" + stamp + ".vsx"));
-            File.WriteAllBytes(path + ".tmp", kv.Value); File.Move(path + ".tmp", path);
-            File.Delete(Cfg.Data(slot + ".png")); File.Delete(Cfg.Data(slot + "-active.png"));
-        }
-        MessageBox.Show(this, found.Count + " presets restored. Press a preset key to load one.", Text);
+            Text = "github.com/denzlobin/vsx-deck", Font = new Font("Consolas", 9f), AutoSize = false, TextAlign = ContentAlignment.MiddleCenter,
+            Bounds = new Rectangle(0, y, W, 20), LinkColor = Color.FromArgb(0x35, 0xd0, 0x7f), ActiveLinkColor = MainForm.Light, LinkBehavior = LinkBehavior.HoverUnderline
+        };
+        repo.LinkClicked += (s, e) => Open(RepoUrl);
+        Controls.Add(repo); y += 34;
+        Line("Licensed under MIT", new Font("Segoe UI", 8.25f), MainForm.Muted, 8);
+        Line("Not affiliated with or endorsed by Slate Digital or Steven Slate Audio.\nVSX is their product; you need your own licensed copy.",
+            new Font("Segoe UI", 8.25f), Color.FromArgb(0x77, 0x78, 0x7e), 20, 34);
+
+        var support = SettingsForm.Btn("\u2665  Support on Ko-fi", (s, e) => Open(SupportUrl));
+        var close = SettingsForm.Btn("Close", (s, e) => Close());
+        support.Location = new Point(16, y); close.Location = new Point(W - 16 - MainForm.U(close.PreferredSize.Width), y);
+        Controls.Add(support); Controls.Add(close); CancelButton = close;
+        ClientSize = new Size(W, y + MainForm.U(close.Height) + 16);
+        SettingsForm.ToDpi(this);
     }
+    void Line(string text, Font font, Color color, int gap, int height = 0)   // one centred line (or two with \n)
+    {
+        int h = height > 0 ? height : (int)Math.Ceiling(font.GetHeight(96f)) + 2;   // 100 % units
+        Controls.Add(new Label { Text = text, Font = font, ForeColor = color, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Bounds = new Rectangle(0, y, W, h) });
+        y += h + gap;
+    }
+    static void Open(string url) { try { System.Diagnostics.Process.Start(url); } catch (Exception) { } }
 }
 
 static class Program
 {
-    [STAThread]
     [DllImport("winmm.dll")] static extern int timeBeginPeriod(int ms);
+    [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [STAThread]
     static void Main(string[] args)
     {
+        // Sharp text at 125 % / 150 % display scaling: draw at the real DPI instead of being stretched by Windows.
+        try { SetProcessDpiAwarenessContext((IntPtr)(-4)); }   // per-monitor v2 (Windows 10 1703+)
+        catch (EntryPointNotFoundException) { SetProcessDPIAware(); }
         timeBeginPeriod(1);   // 1 ms sleeps for the audio loop (Windows 11 default is ~15.6 ms: too coarse, crackles)
         bool created, tray = Array.IndexOf(args, "--tray") >= 0;
         using (new Mutex(true, "VSXDeck.single", out created))
