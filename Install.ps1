@@ -56,14 +56,24 @@ function HasCable { [bool]([AudioDevices]::Names(1) | Where-Object { $_ -like '*
 function Is64BitDll($path) {
     if (-not $path -or [IO.Path]::GetExtension($path) -ne '.dll' -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
     try {
-        $b = [IO.File]::ReadAllBytes($path); if ($b.Length -lt 0x40) { return $false }
+        # The header is in the first 4 KB; VSX.dll itself can be hundreds of MB.
+        $b = New-Object byte[] 4096
+        $fs = [IO.File]::OpenRead($path); try { $n = $fs.Read($b, 0, $b.Length) } finally { $fs.Dispose() }
+        if ($n -lt 0x40) { return $false }
         $pe = [BitConverter]::ToInt32($b, 0x3C)
-        return $pe -gt 0 -and $pe + 6 -le $b.Length -and [BitConverter]::ToUInt16($b, $pe + 4) -eq 0x8664
+        return $pe -gt 0 -and $pe + 6 -le $n -and [BitConverter]::ToUInt16($b, $pe + 4) -eq 0x8664
     } catch { return $false }
 }
-# VSX.dll in these folders or up to two levels below them (installers often add a vendor folder).
-$vstFolders = "$env:ProgramFiles\VstPlugins", "$env:ProgramFiles\Steinberg\VstPlugins", "$env:CommonProgramFiles\VST2",
-              "$env:CommonProgramFiles\Steinberg\VST2", "$env:ProgramFiles\VST2"
+# VSX.dll in these folders or up to two levels below them (installers often add a vendor folder): first the VST2
+# folder registered in Windows (VSTPluginsPath, set by many plugin installers), then the usual places, then common
+# folders at the drive root (e.g. C:\VST\X64\VSX.dll).
+$registered = foreach ($k in 'HKLM:\SOFTWARE\VST', 'HKCU:\SOFTWARE\VST') {
+    (Get-ItemProperty -LiteralPath $k -Name VSTPluginsPath -ErrorAction SilentlyContinue).VSTPluginsPath
+}
+$vstFolders = @($registered | Where-Object { $_ }) +
+              "$env:ProgramFiles\VstPlugins", "$env:ProgramFiles\Steinberg\VstPlugins", "$env:CommonProgramFiles\VST2",
+              "$env:CommonProgramFiles\Steinberg\VST2", "$env:ProgramFiles\VST2",
+              "$env:SystemDrive\VST", "$env:SystemDrive\VSTPlugins", "$env:SystemDrive\VST2", "$env:SystemDrive\VST Plugins"
 function FindVsx($folders) {
     foreach ($d in $folders) {
         if (-not (Test-Path -LiteralPath $d -PathType Container)) { continue }
@@ -129,8 +139,8 @@ if ($DryRun) {
 }
 
 # Files from a downloaded zip carry Windows' "came from the internet" mark, and copies keep it: SmartScreen would then
-# stop the unsigned VSXDeck.exe ("Windows protected your PC").
-Get-ChildItem -LiteralPath $kit -Recurse -File | Unblock-File
+# stop the unsigned VSXDeck.exe ("Windows protected your PC"). Only what this script copies is unblocked.
+Get-ChildItem -LiteralPath "$kit\bin", "$kit\com.vsxdeck.sdPlugin" -Recurse -File | Unblock-File
 
 if ($full) {
     Step 'VB-Cable (virtual default output)'
@@ -182,7 +192,7 @@ if ($full) {
             for ($i = 0; $i -lt $outs.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $outs[$i]) }
             $n = 0
             do { $a = (Read-Host 'Number [1]').Trim(); if (-not $a) { $n = 1 } elseif (-not [int]::TryParse($a, [ref]$n)) { $n = 0 } } until ($n -ge 1 -and $n -le $outs.Count)
-            Set-Content $outFile ($outs[$n - 1] -replace ' \(.*\)$', '') -NoNewline   # match by name without the "(driver)" suffix
+            Set-Content $outFile $outs[$n - 1] -NoNewline   # the full name, as Settings saves it: two devices can both be "Speakers (...)"
         }
     }
     if (Test-Path $outFile) { Write-Host "Output: $(Get-Content $outFile)" }
@@ -194,7 +204,7 @@ if ($full) {
 Step "VSX Deck Holder for DAWs in $VstDir"
 $same = { (Test-Path -LiteralPath $vst) -and (Get-FileHash -LiteralPath $vst).Hash -eq (Get-FileHash -LiteralPath "$kit\bin\$holder").Hash }
 if (& $same) { Write-Host 'Up to date.' }
-elseif (-not $full -or (Read-Host "Install VSX Deck Holder (VST2) to $VstDir? [Y/n]") -notmatch '^[nN]') {
+elseif (-not $full -or (Read-Host "Install VSX Deck Holder (VST2) to $($VstDir)? [Y/n]") -notmatch '^[nN]') {
     # Plain copy if the folder is yours; Program Files and the like need an administrator prompt.
     try { New-Item -ItemType Directory -Force -Path $VstDir | Out-Null; Copy-Item -LiteralPath "$kit\bin\$holder" -Destination $vst -Force }
     catch {

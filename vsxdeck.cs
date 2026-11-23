@@ -205,26 +205,39 @@ interface IAudioRenderClient { [PreserveSig] int GetBuffer(uint frames, out IntP
 
 static class Wasapi
 {
+    [DllImport("ole32.dll")] static extern int PropVariantClear(ref PropVariant pv);
+    // A device's friendly name. The string is COM memory that must be freed: the default-output check runs this
+    // every 2 s for as long as the app is up.
+    static string FriendlyName(IMMDevice d)
+    {
+        IPropertyStore ps;
+        if (d.OpenPropertyStore(0, out ps) != 0 || ps == null) return "";
+        try
+        {
+            var key = new PropKey { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 }; // PKEY_Device_FriendlyName
+            PropVariant v; if (ps.GetValue(ref key, out v) != 0) return "";
+            try { return v.vt == 31 && v.p != IntPtr.Zero ? Marshal.PtrToStringUni(v.p) : ""; }
+            finally { PropVariantClear(ref v); }
+        }
+        finally { Marshal.ReleaseComObject(ps); }
+    }
     // Active devices of a flow (0 = playback, 1 = recording) with their friendly names.
     static System.Collections.Generic.IEnumerable<Tuple<string, IMMDevice>> Devices(int flow)
     {
         var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
         IMMDeviceCollection col; en.EnumAudioEndpoints(flow, 1 /*ACTIVE*/, out col);
         int n; col.GetCount(out n);
-        var key = new PropKey { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 }; // PKEY_Device_FriendlyName
         for (int i = 0; i < n; i++)
         {
             IMMDevice d; col.Item(i, out d);
-            IPropertyStore ps; d.OpenPropertyStore(0, out ps);
-            PropVariant v; ps.GetValue(ref key, out v);
-            yield return Tuple.Create(v.vt == 31 ? Marshal.PtrToStringUni(v.p) : "", d);
+            yield return Tuple.Create(FriendlyName(d), d);
         }
     }
     public static string[] Names(int flow) { return Devices(flow).Select(t => t.Item1).ToArray(); }
     public static IAudioClient Open(int flow, string nameContains, out string fullName)
     {
-        // Best match first: the exact name (Settings saves it), then the name before its "(driver)" suffix (the
-        // installer saves that), then any name containing it; so "Speakers" doesn't pick "Speakers 2 (USB)".
+        // Best match first: the exact name (Settings and the installer save it), then the name before its "(driver)"
+        // suffix (-Output, older installs), then any name containing it; so "Speakers" doesn't pick "Speakers 2 (USB)".
         var all = Devices(flow).ToList();
         var t = all.FirstOrDefault(d => d.Item1.Equals(nameContains, StringComparison.OrdinalIgnoreCase))
              ?? all.FirstOrDefault(d => d.Item1.StartsWith(nameContains + " (", StringComparison.OrdinalIgnoreCase))
@@ -245,10 +258,8 @@ static class Wasapi
         try
         {
             IMMDevice d; if (en.GetDefaultAudioEndpoint(0, 1 /*eMultimedia*/, out d) != 0 || d == null) return "";
-            IPropertyStore ps; if (d.OpenPropertyStore(0, out ps) != 0) return "";
-            var key = new PropKey { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
-            PropVariant v; ps.GetValue(ref key, out v);
-            return v.vt == 31 ? Marshal.PtrToStringUni(v.p) : "";
+            try { return FriendlyName(d); }
+            finally { Marshal.ReleaseComObject(d); }
         }
         finally { Marshal.ReleaseComObject(en); }
     }
@@ -480,9 +491,10 @@ sealed class Engine : IDisposable
 
     public void Dispose()
     {
-        run = false; thread.Join(1000);
+        run = false; bool stopped = thread.Join(1000);
         try { cap.Stop(); ren.Stop(); } catch (Exception) { }   // the device may be gone
-        Marshal.ReleaseComObject(cap); Marshal.ReleaseComObject(ren);
+        if (!stopped) return;   // still inside a WASAPI call: leave the objects to the GC rather than release them under it
+        foreach (object c in new object[] { capC, renC, cap, ren }) if (c != null) Marshal.ReleaseComObject(c);
     }
 }
 
@@ -625,6 +637,7 @@ sealed class MainForm : Form
     void UpdateHeader()   // route or error, dropouts, and a VSX Systemwide warning
     {
         string t = shownGlitches > 0 ? string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches) : infoText;
+        if (presetText.Length > 0) t = presetText + "   ·   " + t;
         bool notCable = !string.IsNullOrEmpty(defaultOut) && defaultOut.IndexOf("CABLE Input", StringComparison.OrdinalIgnoreCase) < 0;
         if (notCable) t = "Windows plays to " + defaultOut + ", not VB-Cable: VSX Deck hears nothing.   ·   " + t;
         if (systemwide) t = "VSX Systemwide is running too: system audio may go through VSX twice. Quit one of them.   ·   " + t;
@@ -708,6 +721,23 @@ sealed class MainForm : Form
         if (watching && fi.LastWriteTimeUtc == seenStatus) return;
         if (watching) captureAt = Environment.TickCount + 1500;
         watching = true; seenStatus = fi.LastWriteTimeUtc;
+        presetText = PresetText(); UpdateHeader();
+    }
+    string presetText = "";
+    // What the deck has live, for the header: "Preset 4 · HUMAN LINEAR", "· bypassed", or "VSX off".
+    static string PresetText()
+    {
+        try
+        {
+            string[] s = File.ReadAllText(Cfg.Data("status.txt")).Split('\n');
+            if (!s[0].StartsWith("on")) return "VSX off";
+            string room = s[0].Substring(2).Trim(), t = room;
+            int n; string last = Cfg.Data("lastslot.txt");
+            if (File.Exists(last) && int.TryParse(File.ReadAllText(last).Trim(), out n) && File.Exists(Cfg.Data("slot" + n + ".vsx")))
+                t = "Preset " + n + (room.Length > 0 ? " · " + room : "");
+            return s.Length > 1 && s[1].Trim() == "bypass 1" ? t + " · bypassed" : t;
+        }
+        catch (IOException) { return ""; }
     }
 
     // Deck key pictures: a square crop of the room picture VSX shows for the active slot, saved as slotN.png /
@@ -730,6 +760,14 @@ sealed class MainForm : Form
             using (var shot = new Bitmap(Math.Max(1, editor.Width), Math.Max(1, editor.Height)))
             {
                 using (var g = Graphics.FromImage(shot)) { IntPtr dc = g.GetHdc(); PrintWindow(editor.Handle, dc, 2 /*PW_RENDERFULLCONTENT*/); g.ReleaseHdc(dc); }
+                // On some GPUs PrintWindow returns black for VSX's window: copy it from the screen instead, but only
+                // while nothing covers it. Still black: keep the plain key.
+                if (MostlyBlack(shot))
+                {
+                    if (!EditorUncovered()) { Program.Log("picture skipped: a window covers VSX"); return; }
+                    using (var g = Graphics.FromImage(shot)) g.CopyFromScreen(editor.PointToScreen(Point.Empty), Point.Empty, editor.Size);
+                    if (MostlyBlack(shot)) { Program.Log("picture skipped: VSX's window captured black"); return; }
+                }
                 int pictureH = (int)(shot.Height * 0.72);                 // room picture, above VSX's control strip
                 int side = Math.Min(pictureH, shot.Width);
                 var src = new Rectangle((shot.Width - side) / 2, (pictureH - side) / 2, side, side);
@@ -738,6 +776,28 @@ sealed class MainForm : Form
             }
         }
         catch (IOException) { }
+    }
+    static bool MostlyBlack(Bitmap b)   // under 2 % of a 32 x 24 sample grid lit
+    {
+        int lit = 0, n = 0;
+        for (int y = 0; y < b.Height; y += Math.Max(1, b.Height / 24))
+            for (int x = 0; x < b.Width; x += Math.Max(1, b.Width / 32), n++)
+            {
+                Color c = b.GetPixel(x, y);
+                if (c.R + c.G + c.B > 3 * 24) lit++;
+            }
+        return lit * 50 < n;
+    }
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point p);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+    bool EditorUncovered()   // the centre and four inner corners of VSX's area belong to this window
+    {
+        var r = editor.RectangleToScreen(editor.ClientRectangle);
+        int dx = r.Width / 8, dy = r.Height / 8;
+        foreach (var p in new[] { new Point(r.Left + r.Width / 2, r.Top + r.Height / 2), new Point(r.Left + dx, r.Top + dy),
+                                  new Point(r.Right - dx, r.Top + dy), new Point(r.Left + dx, r.Bottom - dy), new Point(r.Right - dx, r.Bottom - dy) })
+            if (GetAncestor(WindowFromPoint(p), 2 /*GA_ROOT*/) != Handle) return false;
+        return true;
     }
     // 144x144 key: room picture, preset number badge, room name on a dark band; active = green frame and badge.
     static void SaveKey(Bitmap shot, Rectangle src, int slot, string room, bool active, string path)

@@ -21,7 +21,7 @@ if ($LASTEXITCODE) { throw 'VSXDeck.exe failed to build' }
 Write-Host "VSXDeck.exe $version"
 
 $dll = "$bin\VSX Deck Holder.dll"
-if (-not $Holder -and (Test-Path -LiteralPath $dll) -and (Get-Item -LiteralPath $dll).LastWriteTime -gt (Get-Item -LiteralPath "$src\vsxdeckholder.c").LastWriteTime) {
+if (-not $Holder -and (Test-Path -LiteralPath $dll) -and (Get-Item -LiteralPath $dll).LastWriteTime -ge (Get-Item -LiteralPath "$src\vsxdeckholder.c").LastWriteTime) {   # -ge: a zip extract gives both the same time
     Write-Host 'VSX Deck Holder.dll is newer than vsxdeckholder.c: kept (-Holder to rebuild it anyway)'
 } else {
     $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

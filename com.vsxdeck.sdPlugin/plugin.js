@@ -172,7 +172,7 @@ function ws(port, onOpen, onText) {
       if (buf.length < p + n) return;
       const payload = buf.subarray(p, p + n); buf = buf.subarray(p + n);
       if (op === 1) onText(payload.toString('utf8'));
-      else if (op === 9) send(payload.toString('latin1'), 10);   // ping -> pong
+      else if (op === 9) send(payload, 10);                       // ping -> pong, same bytes (send copies them)
       else if (op === 8) process.exit(0);                         // Stream Deck closed us
     }
   });
@@ -227,7 +227,7 @@ function main() {
     try { fs.watch(DIR, () => { clearTimeout(soon); soon = setTimeout(() => paint(false), 30); }); } catch {}
     setInterval(() => paint(false), 2000);
   }, (text) => {
-    const m = JSON.parse(text);
+    let m; try { m = JSON.parse(text); } catch { return; }   // a malformed message must not crash the plugin
     if (m.event === 'willAppear') {
       const s = (m.payload && m.payload.settings) || {};
       let slot = parseInt(s.slot, 10);
