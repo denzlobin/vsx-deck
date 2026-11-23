@@ -222,7 +222,10 @@ function main() {
   ws(arg('-port'), (send) => {
     sendJson = (o) => send(JSON.stringify(o));
     sendJson({ event: arg('-registerEvent'), uuid: arg('-pluginUUID') });
-    setInterval(() => paint(false), 250);
+    // Redraw when a deck file changes (status, presets, pictures); a slow sweep catches anything the watch missed.
+    let soon;
+    try { fs.watch(DIR, () => { clearTimeout(soon); soon = setTimeout(() => paint(false), 30); }); } catch {}
+    setInterval(() => paint(false), 2000);
   }, (text) => {
     const m = JSON.parse(text);
     if (m.event === 'willAppear') {

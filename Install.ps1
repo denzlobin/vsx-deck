@@ -192,7 +192,7 @@ if (Test-Path $sdExe) {
 
     $action = { param($uuid, $name, $settings)
         [ordered]@{ ActionID = [guid]::NewGuid().ToString(); LinkedTitle = $false; Name = $name
-                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.3.1' }
+                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.3.2' }
                     Resources = $null; Settings = $settings; State = 0; States = @([ordered]@{ ShowTitle = $false }); UUID = $uuid } }
     $keys = [ordered]@{}   # "column,row" on a 5x3 deck
     for ($n = 1; $n -le 10; $n++) { $keys["$(($n - 1) % 5),$([Math]::Floor(($n - 1) / 5))"] = & $action 'com.vsxdeck.slot' 'VSX Preset' ([ordered]@{ slot = $n }) }
@@ -242,9 +242,10 @@ if (-not $full) {
 }
 Step 'Starting VSX Deck'
 Start-Process "$app\VSXDeck.exe"
+$to = if (Test-Path $outFile) { Get-Content $outFile } else { 'the output you choose in its Settings' }
 Write-Host @"
 
-Last step (Windows won't let a script do it): set Windows' default OUTPUT to "CABLE Input (VB-Audio Virtual Cable)".
-Opening Sound settings now. VSX Deck then plays everything through VSX to: $(if (Test-Path $outFile) { Get-Content $outFile } else { 'the output you choose in its Settings' })
+Last step: if Windows doesn't play into VB-Cable yet, VSX Deck's window says so. Press "Play through VSX" there
+(or set "CABLE Input (VB-Audio Virtual Cable)" as the default output in Sound settings).
+VSX Deck then plays everything through VSX to: $to
 "@
-Start-Process 'ms-settings:sound'

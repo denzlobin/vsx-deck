@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.3.1")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.3.1")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.3.2")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.3.2")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -149,7 +149,11 @@ sealed class Vst : IDisposable
 
 // ---------------------------------------------------------------- WASAPI (shared mode, polled)
 [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-interface IMMDeviceEnumerator { [PreserveSig] int EnumAudioEndpoints(int flow, int mask, out IMMDeviceCollection c); }
+interface IMMDeviceEnumerator
+{
+    [PreserveSig] int EnumAudioEndpoints(int flow, int mask, out IMMDeviceCollection c);
+    [PreserveSig] int GetDefaultAudioEndpoint(int flow, int role, out IMMDevice d);
+}
 [ComImport, Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IMMDeviceCollection { [PreserveSig] int GetCount(out int n); [PreserveSig] int Item(int i, out IMMDevice d); }
 [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -167,6 +171,14 @@ interface IPolicyConfig
     [PreserveSig] int GetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id, int useDefault, out IntPtr fmt);
     [PreserveSig] int ResetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id);
     [PreserveSig] int SetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr endpointFmt, IntPtr mixFmt);
+    // unused, but they hold their places in the interface before SetDefaultEndpoint
+    [PreserveSig] int GetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string id, int useDefault, IntPtr defaultPeriod, IntPtr minPeriod);
+    [PreserveSig] int SetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr period);
+    [PreserveSig] int GetShareMode([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr mode);
+    [PreserveSig] int SetShareMode([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr mode);
+    [PreserveSig] int GetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string id, int fxStore, IntPtr key, IntPtr value);
+    [PreserveSig] int SetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string id, int fxStore, IntPtr key, IntPtr value);
+    [PreserveSig] int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string id, int role);
 }
 [ComImport, Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9")] class PolicyConfigClient { }
 [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
@@ -212,14 +224,45 @@ static class Wasapi
     public static string[] Names(int flow) { return Devices(flow).Select(t => t.Item1).ToArray(); }
     public static IAudioClient Open(int flow, string nameContains, out string fullName)
     {
-        foreach (var t in Devices(flow))
+        // Best match first: the exact name (Settings saves it), then the name before its "(driver)" suffix (the
+        // installer saves that), then any name containing it; so "Speakers" doesn't pick "Speakers 2 (USB)".
+        var all = Devices(flow).ToList();
+        var t = all.FirstOrDefault(d => d.Item1.Equals(nameContains, StringComparison.OrdinalIgnoreCase))
+             ?? all.FirstOrDefault(d => d.Item1.StartsWith(nameContains + " (", StringComparison.OrdinalIgnoreCase))
+             ?? all.FirstOrDefault(d => d.Item1.IndexOf(nameContains, StringComparison.OrdinalIgnoreCase) >= 0);
+        if (t != null)
         {
-            if (t.Item1.IndexOf(nameContains, StringComparison.OrdinalIgnoreCase) < 0) continue;
             fullName = t.Item1;
             Guid iid = typeof(IAudioClient).GUID; object o; t.Item2.Activate(ref iid, 23 /*CLSCTX_ALL*/, IntPtr.Zero, out o);
             return (IAudioClient)o;
         }
         throw new Exception((flow == 0 ? "playback" : "recording") + " device containing '" + nameContains + "' not found");
+    }
+
+    // Windows' default output (what apps play to), or "" if there is none.
+    public static string DefaultOutput()
+    {
+        var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+        try
+        {
+            IMMDevice d; if (en.GetDefaultAudioEndpoint(0, 1 /*eMultimedia*/, out d) != 0 || d == null) return "";
+            IPropertyStore ps; if (d.OpenPropertyStore(0, out ps) != 0) return "";
+            var key = new PropKey { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
+            PropVariant v; ps.GetValue(ref key, out v);
+            return v.vt == 31 ? Marshal.PtrToStringUni(v.p) : "";
+        }
+        finally { Marshal.ReleaseComObject(en); }
+    }
+    // Makes CABLE Input Windows' default output, as Sound settings' "Set as default" does (console and multimedia;
+    // the communications default is left alone).
+    public static void PlayIntoCable()
+    {
+        var dev = Devices(0).FirstOrDefault(t => t.Item1.IndexOf("CABLE Input", StringComparison.OrdinalIgnoreCase) >= 0);
+        if (dev == null) throw new Exception("VB-Cable (CABLE Input) not found");
+        string id; dev.Item2.GetId(out id);
+        var pc = (IPolicyConfig)new PolicyConfigClient();
+        try { foreach (int role in new[] { 0, 1 }) { int hr = pc.SetDefaultEndpoint(id, role); if (hr != 0) throw new Exception("setting the default output failed 0x" + hr.ToString("X8")); } }
+        finally { Marshal.ReleaseComObject(pc); }
     }
 
     // Puts both VB-Cable devices at this sample rate, as Sound settings > device > Advanced > Default Format would.
@@ -433,7 +476,13 @@ sealed class MainForm : Form
         Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(12), 0, 0, 0),
         ForeColor = Muted, Font = new Font("Segoe UI", 9f), AutoEllipsis = true
     };
-    string infoText = ""; int shownGlitches;
+    string infoText = ""; int shownGlitches; bool infoError, systemwide; int systemwideAt = Environment.TickCount;
+    string defaultOut; int defaultAt = Environment.TickCount;   // Windows' default output, checked every 2 s
+    readonly Button playHere = new Button
+    {
+        Text = "Play through VSX", Dock = DockStyle.Fill, Visible = false, FlatStyle = FlatStyle.Flat, TabStop = false, Cursor = Cursors.Hand,
+        ForeColor = Color.FromArgb(0xec, 0xea, 0xe6), BackColor = Color.FromArgb(0x1f, 0x20, 0x24), Font = new Font("Segoe UI", 8.25f)
+    };
     int retryAt = -1;   // audio failed (device off/unplugged): reconnect when due
     Form settings, aboutBox;
     readonly System.Windows.Forms.Timer idle = new System.Windows.Forms.Timer { Interval = 30 };
@@ -453,7 +502,17 @@ sealed class MainForm : Form
         Tool(tools, 0, "\uE713", "Settings", OpenSettings);
         Tool(tools, 1, "\uE946", "About VSX Deck", OpenAbout);
         Tool(tools, 2, "\uEB51", "Support development (Ko-fi)", () => AboutForm.Open(AboutForm.SupportUrl));
-        header.Controls.Add(info); header.Controls.Add(tools);
+        playHere.FlatAppearance.BorderColor = Color.FromArgb(0x3d, 0x40, 0x49);
+        playHere.FlatAppearance.MouseOverBackColor = Key; playHere.FlatAppearance.MouseDownBackColor = Charcoal;
+        playHere.Click += (s, e) =>
+        {
+            try { Wasapi.PlayIntoCable(); defaultAt = Environment.TickCount; }
+            catch (Exception ex) { MessageBox.Show(this, ex.Message + "\n\nSet CABLE Input as the default output in Sound settings.", "VSX Deck"); }
+        };
+        new ToolTip().SetToolTip(playHere, "Make VB-Cable (CABLE Input) Windows' default output, so system audio goes through VSX");
+        var playBox = new Panel { Dock = DockStyle.Right, Width = S(140), Padding = new Padding(0, S(4), S(4), S(4)) };
+        playBox.Controls.Add(playHere);
+        header.Controls.Add(info); header.Controls.Add(playBox); header.Controls.Add(tools);   // last added docks rightmost
         Controls.Add(editor); Controls.Add(header);
         // VSX first, audio second: with the output device off or unplugged the window still opens, says
         // "Waiting for audio" and connects when the device appears (the idle timer retries every 2 s).
@@ -475,6 +534,8 @@ sealed class MainForm : Form
             }
             if (engine == null && retryAt != -1 && Environment.TickCount - retryAt >= 0) RestartAudio();
             ShowGlitches();
+            CheckSystemwide();
+            CheckDefaultOutput();
             WatchStatus();
             CaptureSlotPictureWhenDue();
         };
@@ -530,14 +591,39 @@ sealed class MainForm : Form
         try { engine = new Engine(VstFor); SetInfo(engine.Info, false); Program.Log("audio: " + engine.Info); }
         catch (Exception ex) { retryAt = Environment.TickCount + 2000; SetInfo("Waiting for audio: " + ex.Message, true); }
     }
-    void SetInfo(string text, bool error) { infoText = text; info.Text = text; info.ForeColor = error ? Warn : Muted; }
+    void SetInfo(string text, bool error) { infoText = text; infoError = error; UpdateHeader(); }
+    void UpdateHeader()   // route or error, dropouts, and a VSX Systemwide warning
+    {
+        string t = shownGlitches > 0 ? string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches) : infoText;
+        bool notCable = !string.IsNullOrEmpty(defaultOut) && defaultOut.IndexOf("CABLE Input", StringComparison.OrdinalIgnoreCase) < 0;
+        if (notCable) t = "Windows plays to " + defaultOut + ", not VB-Cable: VSX Deck hears nothing.   ·   " + t;
+        if (systemwide) t = "VSX Systemwide is running too: system audio may go through VSX twice. Quit one of them.   ·   " + t;
+        info.Text = t; info.ForeColor = infoError || systemwide || notCable ? Warn : Muted;
+        playHere.Visible = notCable && !systemwide;   // with Systemwide running, switching would fight it
+    }
     void ShowGlitches()   // crackle check: dropouts since the audio connection started
     {
         if (engine == null) return;
         string ev; while (engine.Events.TryDequeue(out ev)) Program.Log(ev);
         if (engine.Glitches == shownGlitches) return;
         shownGlitches = engine.Glitches;
-        info.Text = shownGlitches == 0 ? infoText : string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches);
+        UpdateHeader();
+    }
+    // Every 2 s: is Windows still playing into VB-Cable? It changes when the user picks another output, or when
+    // VSX Systemwide quits and restores the output it found. No automatic switch back: that may be on purpose.
+    void CheckDefaultOutput()
+    {
+        if (Environment.TickCount - defaultAt < 0) return;
+        defaultAt = Environment.TickCount + 2000;
+        string now; try { now = Wasapi.DefaultOutput(); } catch (Exception) { return; }
+        if (now != defaultOut) { defaultOut = now; UpdateHeader(); }
+    }
+    void CheckSystemwide()   // every 10 s: VSX Systemwide started after VSX Deck gets the same warning as at start
+    {
+        if (Environment.TickCount - systemwideAt < 0) return;
+        systemwideAt = Environment.TickCount + 10000;
+        bool on = System.Diagnostics.Process.GetProcessesByName("VSXSystemwide").Length > 0;
+        if (on != systemwide) { systemwide = on; UpdateHeader(); }
     }
     void OpenSettings() { OpenOnce(ref settings, () => new SettingsForm(this)); }
     void OpenAbout() { OpenOnce(ref aboutBox, () => new AboutForm(Icon)); }
@@ -847,7 +933,18 @@ static class Program
     [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int processId);   // -1 = any
     public static void Log(string line)
     {
-        try { File.AppendAllText(Path.Combine(Cfg.AppDir, "vsxdeck.log"), DateTime.Now.ToString("s") + "  " + line + Environment.NewLine); }
+        try
+        {
+            string path = Path.Combine(Cfg.AppDir, "vsxdeck.log");
+            var fi = new FileInfo(path);
+            if (fi.Exists && fi.Length > 1 << 20)   // past 1 MB: keep the newer half
+            {
+                string all = File.ReadAllText(path);
+                int cut = all.IndexOf('\n', all.Length / 2);
+                File.WriteAllText(path, cut < 0 ? "" : all.Substring(cut + 1));
+            }
+            File.AppendAllText(path, DateTime.Now.ToString("s") + "  " + line + Environment.NewLine);
+        }
         catch (Exception) { }   // logging must never be what fails
     }
 }

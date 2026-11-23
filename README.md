@@ -23,8 +23,8 @@ Switch and save **Steven Slate Audio VSX** presets from an **Elgato Stream Deck*
    - **System-wide**: all Windows audio goes through VSX. Installs VB-Cable, the VSX Deck app, the DAW
      plugin and the Stream Deck keys.
    - **DAW only**: the DAW plugin and the Stream Deck keys, doesn't touch Windows audio.
-3. **System-wide**: set the Windows default output to **CABLE Input (VB-Audio Virtual Cable)**. The installer opens
-   Sound settings for you.
+3. **System-wide**: Windows must play into **CABLE Input (VB-Audio Virtual Cable)**. If it doesn't, VSX Deck's window
+   says so: press **Play through VSX** (or set CABLE Input as the default output in Sound settings).
 4. **DAW**: rescan plugins and put **VSX Deck Holder** where VSX was (in Reaper: View → Monitoring FX).
 
 Running the installer again updates everything and keeps your deck layout. Options: `-Mode full|daw`, `-Vsx <path to VSX.dll>`,
