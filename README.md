@@ -9,7 +9,8 @@ Switch and save **Steven Slate Audio VSX** presets from an **Elgato Stream Deck*
   using the same output, otherwise use Bypass.
 - **Preset keys** (up to 99): switch room presets.
 - **Save**: press and hold to store the current VSX settings in the selected preset.
-- **Bypass**: VSX's own level-matched bypass.
+- **Bypass**: VSX's own level-matched bypass. While bypassed, preset keys turn purple and the active one says
+  BYPASSED.
 - **App** (system-wide install): opens the VSX Deck window, or brings it to the front.
 
 > **Use VSX Deck or VSX Systemwide, not both.** Both send system audio through VSX, so running both gives you double
@@ -74,6 +75,27 @@ Windows would hide the files it writes from VSX Deck.
 
 Options: `-Mode full|daw`, `-Vsx <VSX.dll or its folder>`, `-VstDir <folder for the DAW plugin>`, `-DryRun` (shows
 what it would do without installing anything).
+
+### Manual install
+
+If your security software blocks the script, or you'd rather not run it, copy the files yourself. You won't get the
+ready-made Stream Deck profile.
+
+1. If you downloaded a zip: before extracting it, right-click it → **Properties** → tick **Unblock**. Otherwise
+   Windows blocks `VSXDeck.exe`.
+2. Close your DAW and the **Elgato Stream Deck** app.
+3. Create the folder `%LOCALAPPDATA%\VSX Deck`. If `VSX.dll` isn't in `C:\Program Files\VstPlugins`, put a text file
+   `vsx.txt` there with one line: the full path to VSX's 64-bit VST2 DLL. Save it as plain UTF-8, Notepad's default.
+4. **DAW**: copy `bin\VSX Deck Holder.dll` into a folder your DAW scans for VST2 plugins (for example the one
+   `VSX.dll` is in). Rescan plugins and put **VSX Deck Holder** where VSX was.
+5. **Stream Deck keys**: copy the `com.vsxdeck.sdPlugin` folder into `%APPDATA%\Elgato\StreamDeck\Plugins\` and start
+   the Stream Deck app. Drag the **VSX Deck** actions onto keys; new **VSX Preset** keys number themselves.
+6. **System-wide** (optional): install [VB-Cable](https://vb-audio.com/Cable/). Copy `bin\VSXDeck.exe` and
+   `bin\VSX Deck Holder.dll` into `%LOCALAPPDATA%\VSX Deck`, run `VSXDeck.exe` and answer **Yes** when it asks to
+   start at login. Choose your output in **Settings** and press **Play through VSX**.
+
+To remove it, delete those files and folders. Keep the `slotN.vsx` files in `%LOCALAPPDATA%\VSX Deck` if you want
+your presets.
 
 ## Use
 

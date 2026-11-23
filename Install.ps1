@@ -6,7 +6,7 @@
   Modes (asked if not given):
     full  System-wide: all Windows audio goes through VSX, plus the DAW plugin.
             - VB-Cable (asks first; admin prompt)         Windows -> VB-Cable -> VSX Deck -> your interface
-            - VSX Deck app                                %LOCALAPPDATA%\VSX Deck (per user; starts at login, in the tray)
+            - VSX Deck app                                %LOCALAPPDATA%\VSX Deck (per user; asks about start at login)
             - VSX Deck Holder for DAWs (asks)             -VstDir, default: the folder VSX.dll is in
     daw   DAW only: VSX Deck Holder for your DAW and the deck keys. No VB-Cable, no app, Windows audio untouched.
   Both: Stream Deck plugin + "VSX Deck" profile, deck state in %LOCALAPPDATA%\VSX Deck.
@@ -88,6 +88,14 @@ function VsxAt($path) {
     if (Test-Path -LiteralPath $path -PathType Leaf) { if (Is64BitDll $path) { return $path } else { return $null } }
     FindVsx @($path)
 }
+# Windows' Open dialog for VSX.dll; "" on Cancel. A hidden topmost owner keeps it in front of the console.
+function BrowseVsx {
+    Add-Type -AssemblyName System.Windows.Forms
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog -Property @{
+        Title = 'Find VSX.dll (Slate VSX, 64-bit VST2)'; Filter = 'VSX.dll|VSX.dll|Plugins (*.dll)|*.dll'; InitialDirectory = $env:ProgramFiles }
+    $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }
+    try { if ($dlg.ShowDialog($owner) -eq 'OK') { $dlg.FileName } else { '' } } finally { $owner.Dispose(); $dlg.Dispose() }
+}
 function Ask($question) { if ($DryRun) { throw "A dry run can't ask '$question': pass -Mode / -Vsx / -VstDir instead." }; (Read-Host $question).Trim().Trim('"') }
 
 Step 'Checking prerequisites'
@@ -109,8 +117,8 @@ else {
     while (-not $Vsx) {
         Write-Host 'VSX.dll (64-bit VST2) was not found in the usual VST folders.'
         if ($DryRun) { throw "$installVsx (Or pass -Vsx with VSX's folder.)" }
-        $where = (Read-Host 'If VSX is installed, type its VST2 folder (or the path to VSX.dll). Press Enter if it is not installed').Trim().Trim('"')
-        if (-not $where) { throw $installVsx }
+        $where = (Read-Host 'Press Enter to browse for VSX.dll, or paste its VST2 folder').Trim().Trim('"')
+        if (-not $where) { $where = BrowseVsx; if (-not $where) { throw $installVsx } }   # Cancel = VSX isn't installed
         $Vsx = VsxAt $where
         if (-not $Vsx) { Write-Warning "No 64-bit VSX.dll in $where (searched two folders deep)." }
     }
@@ -196,9 +204,7 @@ if ($full) {
         }
     }
     if (Test-Path $outFile) { Write-Host "Output: $(Get-Content $outFile)" }
-    $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'VSX Deck.lnk'))
-    $lnk.TargetPath = "$app\VSXDeck.exe"; $lnk.Arguments = '--tray'; $lnk.Save()
-    Write-Host 'Starts at login (in the tray).'
+    # Start at login is the user's choice: the app asks on its first launch (an existing shortcut is kept).
 }
 
 Step "VSX Deck Holder for DAWs in $VstDir"

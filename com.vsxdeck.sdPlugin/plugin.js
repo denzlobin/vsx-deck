@@ -4,7 +4,8 @@
 //  - Preset N : shows preset N's room (picture if VSX Deck made one), green while active. Press = load it
 //               (an empty preset becomes the Save target). Hold 1.5 s = clear it (recoverable; a red bar fills).
 //               A newly added key takes the next free number (highest in use + 1), empty.
-//  - Save   : hold 1 s (a bar fills) = store the open VSX window's settings into the selected preset (save.req).
+//  - Save   : hold 1 s (a bar fills; the key says HOLD TO SAVE) = store the open VSX window's settings into the
+//             selected preset (save.req). A preset it replaces is kept in cleared\.
 //  - Bypass : VSX's own level-matched bypass (bypass.txt).
 //  - App    : starts VSX Deck, or brings its window to the front if it is running (the app handles that).
 // Run without Stream Deck args (`node plugin.js`) to execute the self-check.
@@ -50,7 +51,17 @@ function openApp() {   // a second VSXDeck.exe only tells the running one to sho
   cp.spawn(APP, [], { detached: true, stdio: 'ignore' }).unref();
   return true;
 }
-function requestSave() { const n = lastSlot(); fs.writeFileSync(f('save.req'), String(n)); return n; }
+const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+// Saving over a preset first keeps the old one as cleared\slotN-<time>-replaced.vsx, so a wrong save is recoverable.
+function requestSave() {
+  const n = lastSlot();
+  if (isChunk(read(`slot${n}.vsx`))) {
+    fs.mkdirSync(f('cleared'), { recursive: true });
+    fs.copyFileSync(f(`slot${n}.vsx`), path.join(DIR, 'cleared', `slot${n}-${stamp()}-replaced.vsx`));
+  }
+  fs.writeFileSync(f('save.req'), String(n));
+  return n;
+}
 // Number for a newly added preset key: one past the highest used by a key or a saved preset.
 const MAX_PRESET = 99;
 function nextPreset(keyNumbers) {
@@ -62,9 +73,8 @@ function nextPreset(keyNumbers) {
 // whatever is active; the cleared slot becomes the Save target.
 function clearSlot(n) {
   if (!isChunk(read(`slot${n}.vsx`))) return false;
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
   fs.mkdirSync(f('cleared'), { recursive: true });
-  fs.renameSync(f(`slot${n}.vsx`), path.join(DIR, 'cleared', `slot${n}-${stamp}.vsx`));
+  fs.renameSync(f(`slot${n}.vsx`), path.join(DIR, 'cleared', `slot${n}-${stamp()}.vsx`));
   for (const png of [`slot${n}.png`, `slot${n}-active.png`]) { try { fs.unlinkSync(f(png)); } catch {} }
   fs.writeFileSync(f('lastslot.txt'), String(n));
   return true;
@@ -79,18 +89,19 @@ function twoLines(text, width) {
 }
 // Palette ("B · Deck", green): charcoal keys, green = on/active, purple = bypassed, red = clearing.
 const C = { tile: '#17181c', key: '#1f2024', dim: '#8e8f96', light: '#f4f3f1', green: '#35d07f', track: '#3d4049',
-            purple: '#4a3b8c', save: '#2b2c31', off: '#1b1c20', faint: '#55565c', warn: '#ff8a7a' };
-function key({ bg, fg, top = '', bar = '', big, bigSize = 38, sub = '', dashed = false, outline = '', progress = -1, fill = C.green }) {
+            purple: '#4a3b8c', purpleDim: '#2c2550', amber: '#f0b429', save: '#2b2c31', off: '#1b1c20', faint: '#55565c',
+            warn: '#ff8a7a' };
+function key({ bg, fg, top = '', topSize = 24, bar = '', big, bigSize = 38, sub = '', subFg = fg, dashed = false, outline = '', progress = -1, fill = C.green }) {
   const [a, b] = progress >= 0 ? ['', ''] : twoLines(sub, 12);   // a hold in progress shows its bar instead of the text
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">
 <rect width="144" height="144" rx="18" fill="${bg}"/>
 ${dashed ? '<rect x="6" y="6" width="132" height="132" rx="14" fill="none" stroke="#f0b429" stroke-width="5" stroke-dasharray="12 8"/>' : ''}
 ${outline ? `<rect x="5" y="5" width="134" height="134" rx="15" fill="none" stroke="${outline}" stroke-width="6"/>` : ''}
 ${bar ? `<rect x="44" y="26" width="56" height="12" rx="6" fill="${bar}"/>` : ''}
-<text x="72" y="44" font-family="Segoe UI,Arial" font-size="24" font-weight="600" fill="${fg}" text-anchor="middle">${esc(top)}</text>
+<text x="72" y="44" font-family="Segoe UI,Arial" font-size="${topSize}" font-weight="600" fill="${fg}" text-anchor="middle">${esc(top)}</text>
 <text x="72" y="86" font-family="Segoe UI,Arial" font-size="${bigSize}" font-weight="700" fill="${fg}" text-anchor="middle">${esc(big)}</text>
-<text x="72" y="112" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(a)}</text>
-<text x="72" y="130" font-family="Segoe UI,Arial" font-size="15" fill="${fg}" text-anchor="middle">${esc(b)}</text>
+<text x="72" y="112" font-family="Segoe UI,Arial" font-size="15" fill="${subFg}" text-anchor="middle">${esc(a)}</text>
+<text x="72" y="130" font-family="Segoe UI,Arial" font-size="15" fill="${subFg}" text-anchor="middle">${esc(b)}</text>
 ${progress >= 0 ? `<rect x="20" y="108" width="104" height="14" rx="7" fill="${C.track}"/>
 <rect x="20" y="108" width="${Math.round(14 + 90 * Math.min(1, progress))}" height="14" rx="7" fill="${fill}"/>` : ''}
 </svg>`;
@@ -130,18 +141,24 @@ function pictureKey(n, active) {
 function slotImage(n, progress = -1) {   // progress 0..1 while held to clear (a saved preset only)
   const b = read(`slot${n}.vsx`), room = roomOf(b), active = wanted() && lastSlot() === n && !!room;
   if (room && progress >= 0) return key({ bg: C.key, fg: C.light, top: 'CLEAR', big: String(n), progress, fill: C.warn });
-  const pic = room && pictureKey(n, active);
+  // While bypassed, saved presets turn purple like the Bypass key (no pictures) and the active one says BYPASSED:
+  // it is selected, but not what you hear.
+  const bypassed = wanted() && bypassWanted();
+  const pic = room && !bypassed && pictureKey(n, active);
   if (pic) return pic;
   if (!room) return lastSlot() === n
     ? key({ bg: C.key, fg: C.light, top: 'PRESET', big: String(n), sub: 'save here', outline: C.dim })
     : key({ bg: C.off, fg: C.faint, top: 'PRESET', big: String(n), sub: 'empty' });
+  if (bypassed) return active
+    ? key({ bg: C.purple, fg: '#f1edff', top: 'PRESET', big: String(n), sub: 'BYPASSED', subFg: C.amber, outline: C.amber })
+    : key({ bg: C.purpleDim, fg: '#c9c2e8', top: 'PRESET', big: String(n), sub: room });
   return active
     ? key({ bg: C.tile, fg: C.light, top: 'PRESET', big: String(n), sub: room, outline: C.green })
     : key({ bg: C.key, fg: '#cfcfcf', top: 'PRESET', big: String(n), sub: room });
 }
 function saveImage(progress = -1) {   // progress 0..1 while the key is held
   const n = lastSlot(), room = roomOf(read(`slot${n}.vsx`));
-  return key({ bg: C.save, fg: C.light, top: 'SAVE', big: `→ ${n}`, bigSize: 34, sub: room || 'empty preset', progress });
+  return key({ bg: C.save, fg: C.light, top: 'HOLD TO SAVE', topSize: 17, big: `→ ${n}`, bigSize: 34, sub: room || 'empty preset', progress });
 }
 
 // ---- minimal WebSocket client (text frames, client-masked) -------------------------------------
@@ -300,10 +317,19 @@ function selfTest() {
   assert.deepStrictEqual(m.view(), { on: true, room: '', confirmed: false }, 'unconfirmed until the live instance reports');
   fs.writeFileSync(path.join(dir, 'status.txt'), 'on CELLPHONE');
   assert.deepStrictEqual(m.view(), { on: true, room: 'CELLPHONE', confirmed: true }, 'confirmed by status');
+  const replaced = (n) => { try { return fs.readdirSync(path.join(dir, 'cleared')).filter((x) => x.startsWith(`slot${n}-`) && x.endsWith('-replaced.vsx')); } catch { return []; } };
+  assert.strictEqual(replaced(3).length, 0, 'saving into an empty preset keeps no copy');
   assert.strictEqual(m.requestSave(), 4); assert.strictEqual(fs.readFileSync(path.join(dir, 'save.req'), 'utf8'), '4', 'save asks for active slot');
+  assert.strictEqual(replaced(4).length, 1, 'saving over a preset keeps the old one in cleared\\');
+  assert.ok(fs.readFileSync(path.join(dir, 'cleared', replaced(4)[0])).includes('CELLPHONE'), 'the kept copy is the old preset');
+  assert.ok(Buffer.from(m.saveImage().split(',')[1], 'base64').toString().includes('HOLD TO SAVE'), 'Save key says to hold');
   assert.strictEqual(m.roomOf(fs.readFileSync(path.join(dir, 'slot1.vsx'))), 'HUMAN LINEAR');
   assert.strictEqual(m.bypassWanted(), false, 'no bypass.txt = not bypassed');
   m.toggleBypass(); assert.strictEqual(m.bypassWanted(), true, 'bypass toggles on');
+  const svgOf = (img) => Buffer.from(img.split(',')[1], 'base64').toString();
+  assert.ok(svgOf(m.slotImage(4)).includes(`fill="#4a3b8c"`) && svgOf(m.slotImage(4)).includes('BYPASSED'), 'bypassed: active preset purple, says BYPASSED');
+  assert.ok(svgOf(m.slotImage(1)).includes(`fill="#2c2550"`) && svgOf(m.slotImage(1)).includes('HUMAN'), 'bypassed: other presets dim purple, keep their room');
+  assert.ok(svgOf(m.slotImage(3)).includes('empty') || svgOf(m.slotImage(3)).includes('save here'), 'bypassed: an empty preset looks as before');
   fs.writeFileSync(path.join(dir, 'status.txt'), 'on CELLPHONE\nbypass 1');
   assert.deepStrictEqual(m.applied(), { on: true, room: 'CELLPHONE', bypass: true }, 'status second line = bypass');
   assert.ok(Buffer.from(m.onOffImage().split(',')[1], 'base64').toString().includes('BYPASSED'), 'ON key says bypassed');

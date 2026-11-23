@@ -2,7 +2,7 @@
   "Name": "VSX Deck",
   "Author": "VSX Deck",
   "Description": "Slate VSX from the Stream Deck: ON/OFF, presets, Save and level-matched Bypass. Keys show what the live VSX applied.",
-  "Version": "0.3.7",
+  "Version": "0.3.8",
   "SDKVersion": 2,
   "CodePath": "plugin.js",
   "Nodejs": { "Version": "20", "Debug": "disabled" },
@@ -47,7 +47,7 @@
     {
       "UUID": "com.vsxdeck.save",
       "Name": "VSX Save",
-      "Tooltip": "Hold 1 s (the bar fills) to save the open VSX window's settings into the selected preset.",
+      "Tooltip": "Hold 1 s (the bar fills) to save the open VSX window's settings into the selected preset. A preset it replaces is kept in the cleared folder.",
       "Icon": "action",
       "States": [ { "Image": "key", "ShowTitle": false } ],
       "SupportedInMultiActions": false

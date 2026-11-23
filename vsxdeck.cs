@@ -563,10 +563,14 @@ sealed class MainForm : Form
         var size = vst.EditorSize();
         ClientSize = new Size(size.Width, size.Height + header.Height);
         vst.SizeWindow = (w, h) => BeginInvoke((Action)(() => ClientSize = new Size(w, h + header.Height)));
-        HandleCreated += (s, e) => vst.EditorOpen(editor.Handle);
+        // VSX draws with the GPU: opened into a window that isn't on screen yet (tray start, minimized) it can stay
+        // blank. So its window opens once ours is shown; presets switch without it. "Reload VSX window" reopens it.
+        Shown += (s, e) => OpenEditorIfShown("shown");
+        VisibleChanged += (s, e) => OpenEditorIfShown("shown");
+        Resize += (s, e) => OpenEditorIfShown("restored");
         idle.Tick += (s, e) =>
         {
-            vst.EditorIdle();
+            if (editorOpen) vst.EditorIdle();
             if (engine != null && engine.Error != null)
             {
                 string why = engine.Error;
@@ -586,11 +590,13 @@ sealed class MainForm : Form
         tray.Icon = AppIcon(SystemInformation.SmallIconSize); tray.Text = "VSX Deck"; tray.Visible = true;
         tray.ContextMenuStrip = new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("Show VSX", null, (s, e) => ShowWindow());
+        tray.ContextMenuStrip.Items.Add("Reload VSX window", null, (s, e) => { ShowWindow(); OpenEditor("reload"); });
         tray.ContextMenuStrip.Items.Add("Settings…", null, (s, e) => OpenSettings());
         tray.ContextMenuStrip.Items.Add("About…", null, (s, e) => OpenAbout());
         tray.ContextMenuStrip.Items.Add("Exit", null, (s, e) => { exiting = true; Close(); });
         tray.DoubleClick += (s, e) => ShowWindow();
         if (startHidden) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; Load += (s, e) => Hide(); }
+        else Shown += (s, e) => AskStartAtLogin();   // a tray start comes from the login shortcut: already answered
         HandleCreated += (s, e) => ListenForShow();   // BeginInvoke needs the window handle
     }
     static void Tool(Panel bar, int i, string glyph, string tip, Action click)   // 32 x 26, 4 apart, centred in the header
@@ -625,6 +631,19 @@ sealed class MainForm : Form
         bar.Controls.Add(b);
     }
     // One VSX instance for the app's lifetime: a new audio connection only re-rates it (no reload, no burst).
+    bool editorOpen;
+    void OpenEditorIfShown(string why)
+    {
+        if (!editorOpen && IsHandleCreated && Visible && WindowState != FormWindowState.Minimized) OpenEditor(why);
+    }
+    void OpenEditor(string why)   // (re)opens VSX's window in the editor panel
+    {
+        // Flag first: opening makes VSX resize our window, and that Resize must not open it a second time inside this.
+        bool wasOpen = editorOpen; editorOpen = true;
+        if (wasOpen) vst.EditorClose();
+        vst.EditorOpen(editor.Handle);
+        Program.Log("VSX window opened (" + why + ")");
+    }
     Vst VstFor(int rate) { if (vst == null) vst = new Vst(Cfg.Plugin, rate); else vst.SetRate(rate); return vst; }
     public void RestartAudio()
     {
@@ -637,7 +656,6 @@ sealed class MainForm : Form
     void UpdateHeader()   // route or error, dropouts, and a VSX Systemwide warning
     {
         string t = shownGlitches > 0 ? string.Format("{0}   ·   dropouts {1}", infoText, shownGlitches) : infoText;
-        if (presetText.Length > 0) t = presetText + "   ·   " + t;
         bool notCable = !string.IsNullOrEmpty(defaultOut) && defaultOut.IndexOf("CABLE Input", StringComparison.OrdinalIgnoreCase) < 0;
         if (notCable) t = "Windows plays to " + defaultOut + ", not VB-Cable: VSX Deck hears nothing.   ·   " + t;
         if (systemwide) t = "VSX Systemwide is running too: system audio may go through VSX twice. Quit one of them.   ·   " + t;
@@ -667,6 +685,18 @@ sealed class MainForm : Form
         systemwideAt = Environment.TickCount + 10000;
         bool on = System.Diagnostics.Process.GetProcessesByName("VSXSystemwide").Length > 0;
         if (on != systemwide) { systemwide = on; UpdateHeader(); }
+    }
+    // First launch: start at login is the user's call (security software may flag an unsigned app's startup entry),
+    // but without it Windows plays into VB-Cable with nothing listening after a restart. Existing shortcut = answered.
+    void AskStartAtLogin()
+    {
+        if (Cfg.Get("loginAsked", "") == "1") return;
+        if (!File.Exists(Cfg.StartupLink) && MessageBox.Show(this,
+                "Start VSX Deck when you sign in to Windows (in the tray)?\n\nWindows plays into VB-Cable, so without VSX Deck " +
+                "running you hear nothing until you open it. You can change this later in Settings.",
+                "VSX Deck", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            Cfg.SetStartAtLogin(true);
+        Cfg.Set("loginAsked", "1");
     }
     void OpenSettings() { OpenOnce(ref settings, () => new SettingsForm(this)); }
     void OpenAbout() { OpenOnce(ref aboutBox, () => new AboutForm(Icon)); }
@@ -709,7 +739,7 @@ sealed class MainForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); return; } // keep running in the tray
-        idle.Stop(); vst.EditorClose(); if (engine != null) engine.Dispose(); vst.Dispose(); tray.Visible = false;
+        idle.Stop(); if (editorOpen) vst.EditorClose(); if (engine != null) engine.Dispose(); vst.Dispose(); tray.Visible = false;
         base.OnFormClosing(e);
     }
 
@@ -721,21 +751,19 @@ sealed class MainForm : Form
         if (watching && fi.LastWriteTimeUtc == seenStatus) return;
         if (watching) captureAt = Environment.TickCount + 1500;
         watching = true; seenStatus = fi.LastWriteTimeUtc;
-        presetText = PresetText(); UpdateHeader();
+        // The live preset in the title bar (taskbar hover, Alt+Tab) and the tray tooltip (63 characters at most).
+        string p = PresetText(), title = p.Length > 0 ? "VSX Deck · " + p : "VSX Deck";
+        Text = title; tray.Text = title.Length > 63 ? title.Substring(0, 63) : title;
     }
-    string presetText = "";
-    // What the deck has live, for the header: "Preset 4 · HUMAN LINEAR", "· bypassed", or "VSX off".
+    // What the deck has live, for the title: the room ("HUMAN LINEAR", "· bypassed"), or "VSX off".
     static string PresetText()
     {
         try
         {
             string[] s = File.ReadAllText(Cfg.Data("status.txt")).Split('\n');
             if (!s[0].StartsWith("on")) return "VSX off";
-            string room = s[0].Substring(2).Trim(), t = room;
-            int n; string last = Cfg.Data("lastslot.txt");
-            if (File.Exists(last) && int.TryParse(File.ReadAllText(last).Trim(), out n) && File.Exists(Cfg.Data("slot" + n + ".vsx")))
-                t = "Preset " + n + (room.Length > 0 ? " · " + room : "");
-            return s.Length > 1 && s[1].Trim() == "bypass 1" ? t + " · bypassed" : t;
+            string room = s[0].Substring(2).Trim();
+            return s.Length > 1 && s[1].Trim() == "bypass 1" ? (room + " · bypassed").TrimStart(' ', '·') : room;
         }
         catch (IOException) { return ""; }
     }
@@ -1012,6 +1040,7 @@ static class Program
                     "VSX Deck", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
             // Audio devices that aren't there yet are handled by the window ("Waiting for audio"); this only
             // catches VSX itself failing to load.
+            Log(tray ? "start (tray)" : "start");
             try { Application.Run(new MainForm(tray)); }
             catch (Exception ex)
             {
