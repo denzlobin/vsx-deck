@@ -39,7 +39,8 @@ Don't run it from a terminal inside a Microsoft Store app: Windows would hide th
 - **Change a preset**: select it, adjust VSX, hold **Save**. VSX Deck acts like a single source of truth that controls both versions (app and DAW) at once. Save takes the settings from the VSX window on screen; the app hidden in the tray doesn't count.
 - **Clear a preset**: hold its key 1.5 s. It moves to `%LOCALAPPDATA%\VSX Deck\cleared\`, so you can get it back.
 - **More presets**: drag **VSX Preset** onto any key. It takes the next free number.
-- **ON** goes back to the last preset (before you've saved any, it turns VSX on as it is). **OFF** fades to dry in 30 ms.
+- **ON** goes back to the last preset (before you've saved any, it turns VSX on as it is). **OFF** fades to dry in 30 ms, in the app and your DAW alike. The DAW's own on/off checkbox for the plugin stays ticked
+  (a VST2 plugin can't change it), so while OFF, VSX's window shows a strip saying so.
 - **Bypass** stays on when you switch rooms and is never saved into a preset.
 - **Dashed amber outline**: nothing running VSX has confirmed the change yet (the app or your DAW is closed).
 

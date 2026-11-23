@@ -117,10 +117,22 @@ if ($full) {
     if (HasCable) { Write-Host 'Installed.' }
     else {
         if ((Read-Host 'VB-Cable is not installed. Download it from vb-audio.com and install now? (admin prompt) [Y/n]') -match '^[nN]') { throw 'VB-Cable is required: https://vb-audio.com/Cable/' }
-        $dl = Join-Path $env:TEMP 'vbcable'; New-Item -ItemType Directory -Force $dl | Out-Null
-        Invoke-WebRequest 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' -OutFile "$dl\pack.zip" -UseBasicParsing
-        Expand-Archive "$dl\pack.zip" "$dl\x" -Force
-        if ((Get-AuthenticodeSignature "$dl\x\VBCABLE_Setup_x64.exe").Status -ne 'Valid') { throw 'VB-Cable installer signature is not valid; not running it.' }
+        $page = 'https://vb-audio.com/Cable/'
+        $dl = Join-Path $env:TEMP 'vbcable'; Remove-Item -LiteralPath $dl -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force $dl | Out-Null
+        # The pack's file name changes with each VB-Cable release: if this one is gone, the user takes it from the page.
+        try {
+            Invoke-WebRequest 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' -OutFile "$dl\pack.zip" -UseBasicParsing
+            Expand-Archive "$dl\pack.zip" "$dl\x" -Force
+        } catch {
+            Start-Process $page
+            throw "Couldn't download VB-Cable ($($_.Exception.Message)). Install it from the page that just opened ($page), restart if it asks, then run this again."
+        }
+        $sig = Get-AuthenticodeSignature "$dl\x\VBCABLE_Setup_x64.exe"
+        if ($sig.Status -ne 'Valid') { throw 'VB-Cable installer signature is not valid; not running it.' }
+        $signer = $sig.SignerCertificate.Subject
+        if ($signer -notmatch 'VB-Audio|Vincent Burel' -and (Read-Host "The VB-Cable installer is signed by: $signer`nRun it anyway? [y/N]") -notmatch '^[yY]') {
+            throw "Not running it. Install VB-Cable from $page, then run this again."
+        }
         Start-Process "$dl\x\VBCABLE_Setup_x64.exe" -ArgumentList '-i', '-h' -WorkingDirectory "$dl\x" -Verb RunAs -Wait
         Start-Sleep 3
         if (-not (HasCable)) { throw 'VB-Cable did not appear; a restart may be needed. Run this again afterwards.' }
@@ -138,15 +150,18 @@ if ($full) {
     Copy-Item "$kit\bin\*" $app -Force
     $outFile = Join-Path $app 'output.txt'
     if ($Output) { Set-Content $outFile $Output -NoNewline }
-    elseif (-not (Test-Path $outFile)) {
+    elseif (-not (Test-Path $outFile) -or -not (Get-Content $outFile -Raw)) {
         $outs = @([AudioDevices]::Names(0) | Where-Object { $_ -notlike '*VB-Audio*' })
-        Write-Host 'Where should VSX Deck play (your headphone interface)?'
-        for ($i = 0; $i -lt $outs.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $outs[$i]) }
-        $pick = Read-Host 'Number [1]'
-        $name = $outs[$(if ($pick) { [int]$pick - 1 } else { 0 })]
-        Set-Content $outFile ($name -replace ' \(.*\)$', '') -NoNewline   # match by name without the "(driver)" suffix
+        if ($outs.Count -eq 0) { Write-Warning 'No playback device found (interface off?). Choose the output later in VSX Deck Settings.' }
+        else {
+            Write-Host 'Where should VSX Deck play (your headphone interface)?'
+            for ($i = 0; $i -lt $outs.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $outs[$i]) }
+            $n = 0
+            do { $a = (Read-Host 'Number [1]').Trim(); if (-not $a) { $n = 1 } elseif (-not [int]::TryParse($a, [ref]$n)) { $n = 0 } } until ($n -ge 1 -and $n -le $outs.Count)
+            Set-Content $outFile ($outs[$n - 1] -replace ' \(.*\)$', '') -NoNewline   # match by name without the "(driver)" suffix
+        }
     }
-    Write-Host "Output: $(Get-Content $outFile)"
+    if (Test-Path $outFile) { Write-Host "Output: $(Get-Content $outFile)" }
     $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'VSX Deck.lnk'))
     $lnk.TargetPath = "$app\VSXDeck.exe"; $lnk.Arguments = '--tray'; $lnk.Save()
     Write-Host 'Starts at login (in the tray).'
@@ -177,7 +192,7 @@ if (Test-Path $sdExe) {
 
     $action = { param($uuid, $name, $settings)
         [ordered]@{ ActionID = [guid]::NewGuid().ToString(); LinkedTitle = $false; Name = $name
-                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.3.0' }
+                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.3.1' }
                     Resources = $null; Settings = $settings; State = 0; States = @([ordered]@{ ShowTitle = $false }); UUID = $uuid } }
     $keys = [ordered]@{}   # "column,row" on a 5x3 deck
     for ($n = 1; $n -le 10; $n++) { $keys["$(($n - 1) % 5),$([Math]::Floor(($n - 1) / 5))"] = & $action 'com.vsxdeck.slot' 'VSX Preset' ([ordered]@{ slot = $n }) }
@@ -195,7 +210,18 @@ if (Test-Path $sdExe) {
     if ($mine) {   # an update must not undo the user's own key layout
         Write-Host 'Kept your "VSX Deck" profile as it is. (Delete it in the Stream Deck app and run this again for the default layout.)'
     } elseif ($mans) {
-        $device = (Get-Content $mans[0].FullName -Raw | ConvertFrom-Json).Device
+        # Which deck: the one the existing profiles belong to; with several decks, ask.
+        $devices = @($mans | ForEach-Object { try { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).Device } catch { } } |
+                     Where-Object { $_ } | Group-Object { "$($_.Model) $($_.UUID)" } | ForEach-Object { $_.Group[0] })
+        $device = $devices[0]
+        if ($devices.Count -gt 1) {
+            Write-Host 'Several Stream Decks found. Which one gets the VSX Deck profile?'
+            for ($i = 0; $i -lt $devices.Count; $i++) { Write-Host ("  {0}) model {1}, id {2}" -f ($i + 1), $devices[$i].Model, $devices[$i].UUID) }
+            $n = 0
+            do { $a = (Read-Host 'Number [1]').Trim(); if (-not $a) { $n = 1 } elseif (-not [int]::TryParse($a, [ref]$n)) { $n = 0 } } until ($n -ge 1 -and $n -le $devices.Count)
+            $device = $devices[$n - 1]
+        }
+        Write-Host 'The layout is made for a 15-key deck (5 x 3); on other sizes, move the keys in the Stream Deck app.'
         $profId = [guid]::NewGuid().ToString().ToUpper(); $pageId = [guid]::NewGuid().ToString().ToLower()
         $pageDir = Join-Path $root "$profId.sdProfile\Profiles\$($pageId.ToUpper())"
         New-Item -ItemType Directory -Force $pageDir | Out-Null
@@ -219,6 +245,6 @@ Start-Process "$app\VSXDeck.exe"
 Write-Host @"
 
 Last step (Windows won't let a script do it): set Windows' default OUTPUT to "CABLE Input (VB-Audio Virtual Cable)".
-Opening Sound settings now. VSX Deck then plays everything through VSX to: $(Get-Content $outFile)
+Opening Sound settings now. VSX Deck then plays everything through VSX to: $(if (Test-Path $outFile) { Get-Content $outFile } else { 'the output you choose in its Settings' })
 "@
 Start-Process 'ms-settings:sound'

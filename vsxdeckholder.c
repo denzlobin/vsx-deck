@@ -11,6 +11,7 @@
  *
  * The editor is VSX's own window inside a container. VSX only reads its settings when its window opens, so after
  * a change we reopen it behind a snapshot of the old window and drop the snapshot once VSX has redrawn.
+ * While the deck has VSX OFF, a strip across the top of the window says so (the DAW's checkbox can't).
  *
  * Build: cl /O2 /LD vsxdeckholder.c user32.lib gdi32.lib /Fe:"VSX Deck Holder.dll"
  */
@@ -24,7 +25,10 @@
 #define VSX_DLL L"C:\\Program Files\\VstPlugins\\VSX.dll"   /* default; vsx.txt overrides */
 #define FADE_SECONDS 0.03f
 #define POLL_MS 50
+#define WM_STATE (WM_APP + 2)   /* to the editor: ON/OFF changed */
 #define MAX_STATE (1 << 20)   /* largest deck file we read */
+#define MAX_BLOCK 8192        /* dry buffers are this long; bigger host blocks are processed in pieces */
+#define MAX_CH 8
 
 /* ---- minimal VST2 ABI ------------------------------------------------------------------------------- */
 typedef struct AEffect AEffect;
@@ -54,11 +58,12 @@ typedef struct {
     HANDLE thread, stop;            /* deck-state watcher */
     volatile LONG wet;              /* 1 = VSX, 0 = dry (OFF) */
     float gain, step;               /* current wet gain, per-sample fade step */
-    float *dry[8]; int32_t cap;
+    float *dry[MAX_CH];             /* allocated once: the audio thread never allocates */
     Seen active, bypassFile, save;
     int bypass;                     /* wanted level-matched bypass */
     volatile LONG editorOpen;       /* only an instance whose window is open answers Save */
-    HWND container, cover;          /* editor: container holding VSX's window, and the snapshot cover */
+    HWND container, cover, banner;  /* editor: container holding VSX's window, the snapshot cover, the OFF strip */
+    volatile LONG shownWet;         /* wet state the OFF strip last showed */
     HBITMAP coverBmp;
     DWORD coverSince; int stable; long long lastSig;
 } Hold;
@@ -86,7 +91,7 @@ static intptr_t innerHost(AEffect *e, int32_t op, int32_t idx, intptr_t v, void 
     if (op == 1 /* audioMasterVersion */ && !outer) return 2400;
     if (op == 15 /* audioMasterSizeWindow */ && outer) {   /* VSX resized itself (e.g. display scaling): our window must follow */
         Hold *h = (Hold*)outer;                              /* outer is Hold's first member */
-        if (h->container) SetWindowPos(h->container, NULL, 0, 0, idx, (int)v, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        if (h->container) { SetWindowPos(h->container, NULL, 0, 0, idx, (int)v, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE); PostMessageW(h->container, WM_STATE, 0, 0); }
     }
     return g_host ? g_host(outer, op, idx, v, p, o) : 0;
 }
@@ -233,21 +238,18 @@ static void pollSave(Hold *h) {
 }
 static DWORD WINAPI watcher(void *arg) {
     Hold *h = (Hold*)arg;
-    while (WaitForSingleObject(h->stop, POLL_MS) == WAIT_TIMEOUT) { pollBypass(h); pollActive(h); pollSave(h); }
+    while (WaitForSingleObject(h->stop, POLL_MS) == WAIT_TIMEOUT) {
+        pollBypass(h); pollActive(h); pollSave(h);
+        if (h->wet != h->shownWet) { HWND c = h->container; if (c) PostMessageW(c, WM_STATE, 0, 0); }
+    }
     return 0;
 }
 
 /* ---- audio: VSX always runs; OFF fades to the dry input ---------------------------------------------- */
-static void ensureDry(Hold *h, int32_t n) {
-    if (n <= h->cap) return;
-    for (int c = 0; c < 8; c++) { free(h->dry[c]); h->dry[c] = (float*)calloc((size_t)n, sizeof(float)); }
-    h->cap = n;
-}
-static void process(AEffect *e, float **in, float **out, int32_t n) {
-    Hold *h = (Hold*)e;
+static void processBlock(Hold *h, float **in, float **out, int32_t n) {   /* n <= MAX_BLOCK */
+    AEffect *e = &h->outer;
     int chs = e->numOutputs < e->numInputs ? e->numOutputs : e->numInputs;
-    if (chs > 8) chs = 8;
-    ensureDry(h, n);
+    if (chs > MAX_CH) chs = MAX_CH;
     for (int c = 0; c < chs; c++) memcpy(h->dry[c], in[c], (size_t)n * sizeof(float));   /* in may alias out */
     h->inner->processReplacing(h->inner, in, out, n);
     float t = (float)h->wet, g = h->gain;
@@ -258,11 +260,22 @@ static void process(AEffect *e, float **in, float **out, int32_t n) {
     }
     h->gain = g;
 }
+static void process(AEffect *e, float **in, float **out, int32_t n) {
+    Hold *h = (Hold*)e;
+    if (n <= MAX_BLOCK) { processBlock(h, in, out, n); return; }
+    float *ip[32], *op[32];                                   /* rare: a host block longer than MAX_BLOCK */
+    if (e->numInputs > 32 || e->numOutputs > 32) return;
+    for (int32_t done = 0; done < n; done += MAX_BLOCK) {
+        for (int c = 0; c < e->numInputs; c++) ip[c] = in[c] + done;
+        for (int c = 0; c < e->numOutputs; c++) op[c] = out[c] + done;
+        processBlock(h, ip, op, n - done < MAX_BLOCK ? n - done : MAX_BLOCK);
+    }
+}
 
 /* ---- editor: VSX's window, reopened behind a snapshot after each change --------------------------------- */
 #define WM_REFRESH (WM_APP + 1)
 static HWND vsxWindow(Hold *h) {
-    for (HWND c = GetWindow(h->container, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) if (c != h->cover) return c;
+    for (HWND c = GetWindow(h->container, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) if (c != h->cover && c != h->banner) return c;
     return NULL;
 }
 static HBITMAP snapshot(HWND w, int *wd, int *ht, uint32_t **px) {
@@ -283,6 +296,34 @@ static long long signature(const uint32_t *px, int w, int h) {   /* sampled grid
             if (!(x > w * 0.74 && y > h * 0.80)) s = s * 31 + px[y * w + x];
     return s;
 }
+static int dpiOf(HWND w) {   /* GetDpiForWindow on Windows 10 1607+, else the screen's */
+    typedef UINT (WINAPI *DpiFn)(HWND);
+    static DpiFn f; static int tried;
+    if (!tried) { tried = 1; f = (DpiFn)GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"); }
+    if (f) return (int)f(w);
+    HDC dc = GetDC(w); int d = GetDeviceCaps(dc, LOGPIXELSY); ReleaseDC(w, dc); return d;
+}
+/* The DAW's on/off checkbox stays ticked when the deck turns VSX off (VST2 can't tell the host), so while OFF a
+ * strip across the top of our window says so. It covers the top of VSX's window, which is decoration there. */
+static void showBanner(Hold *h) {
+    h->shownWet = h->wet;
+    if (!h->banner) return;
+    if (h->wet) { ShowWindow(h->banner, SW_HIDE); return; }
+    RECT r; GetClientRect(h->container, &r);
+    SetWindowPos(h->banner, HWND_TOP, 0, 0, r.right, MulDiv(24, dpiOf(h->container), 96), SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    InvalidateRect(h->banner, NULL, TRUE);
+}
+static void paintBanner(HWND w) {
+    PAINTSTRUCT ps; HDC dc = BeginPaint(w, &ps); RECT r; GetClientRect(w, &r);
+    HBRUSH bg = CreateSolidBrush(RGB(0x17, 0x18, 0x1c)); FillRect(dc, &r, bg); DeleteObject(bg);
+    int dpi = dpiOf(w);
+    HFONT f = CreateFontW(-MulDiv(9, dpi, 72), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+    HGDIOBJ o = SelectObject(dc, f);
+    SetBkMode(dc, TRANSPARENT); SetTextColor(dc, RGB(0xec, 0xea, 0xe6));
+    r.left += MulDiv(12, dpi, 96);
+    DrawTextW(dc, L"VSX Deck is OFF: you hear the dry signal. Turn VSX on from the Stream Deck.", -1, &r, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS);
+    SelectObject(dc, o); DeleteObject(f); EndPaint(w, &ps);
+}
 static void refreshEditor(Hold *h) {
     HWND v = vsxWindow(h);
     int w, ht; uint32_t *px;
@@ -300,6 +341,7 @@ static void refreshEditor(Hold *h) {
         h->coverSince = GetTickCount(); h->stable = 0; h->lastSig = 0;
         SetTimer(h->container, 1, 30, NULL);
     }
+    showBanner(h);   /* above the new VSX window */
 }
 static void settleTick(Hold *h) {   /* drop the cover once VSX's window stops changing (~90 ms) */
     HWND v = vsxWindow(h);
@@ -315,6 +357,8 @@ static LRESULT CALLBACK containerProc(HWND w, UINT m, WPARAM wp, LPARAM lp) {
     Hold *h = (Hold*)GetWindowLongPtrW(w, GWLP_USERDATA);
     if (h && m == WM_REFRESH) { refreshEditor(h); return 0; }
     if (h && m == WM_TIMER && wp == 1) { settleTick(h); return 0; }
+    if (h && m == WM_STATE) { showBanner(h); return 0; }
+    if (h && m == WM_PAINT && w == h->banner) { paintBanner(w); return 0; }
     if (h && m == WM_PAINT && w == h->cover && h->coverBmp) {
         PAINTSTRUCT ps; HDC dc = BeginPaint(w, &ps), mem = CreateCompatibleDC(dc);
         HGDIOBJ o = SelectObject(mem, h->coverBmp); RECT r; GetClientRect(w, &r);
@@ -335,9 +379,12 @@ static intptr_t openEditor(Hold *h, HWND parent) {
     if (rect) { ht = rect[2] - rect[0]; w = rect[3] - rect[1]; }   /* top, left, bottom, right */
     h->container = CreateWindowExW(0, L"VSXDeckEditor", L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, w, ht, parent, NULL, inst, NULL);
     h->cover = CreateWindowExW(0, L"VSXDeckEditor", L"", WS_CHILD, 0, 0, w, ht, h->container, NULL, inst, NULL);
+    h->banner = CreateWindowExW(0, L"VSXDeckEditor", L"", WS_CHILD, 0, 0, w, 24, h->container, NULL, inst, NULL);
     SetWindowLongPtrW(h->container, GWLP_USERDATA, (LONG_PTR)h);
     SetWindowLongPtrW(h->cover, GWLP_USERDATA, (LONG_PTR)h);
+    SetWindowLongPtrW(h->banner, GWLP_USERDATA, (LONG_PTR)h);
     intptr_t r = h->inner->dispatcher(h->inner, effEditOpen, 0, 0, h->container, 0.f);
+    showBanner(h);
     InterlockedExchange(&h->editorOpen, 1);
     return r;
 }
@@ -345,7 +392,7 @@ static intptr_t closeEditor(Hold *h) {
     InterlockedExchange(&h->editorOpen, 0);
     intptr_t r = h->inner->dispatcher(h->inner, effEditClose, 0, 0, NULL, 0.f);
     if (h->container) { KillTimer(h->container, 1); SetWindowLongPtrW(h->container, GWLP_USERDATA, 0); DestroyWindow(h->container); }
-    h->container = h->cover = NULL;
+    h->container = h->cover = h->banner = NULL;
     if (h->coverBmp) { DeleteObject(h->coverBmp); h->coverBmp = NULL; }
     return r;
 }
@@ -363,7 +410,6 @@ static intptr_t dispatch(AEffect *e, int32_t op, int32_t idx, intptr_t v, void *
     case effEditOpen: return openEditor(h, (HWND)p);
     case effEditClose: return closeEditor(h);
     case effSetSampleRate: if (o > 0) h->step = 1.f / (FADE_SECONDS * o); break;
-    case effSetBlockSize: if (v > 0) ensureDry(h, (int32_t)v); break;
     case effClose: {
         SetEvent(h->stop);
         /* the watcher may be inside SendMessage to this very thread: keep serving sent messages */
@@ -373,7 +419,7 @@ static intptr_t dispatch(AEffect *e, int32_t op, int32_t idx, intptr_t v, void *
         CloseHandle(h->thread); CloseHandle(h->stop);
         intptr_t r = h->inner->dispatcher(h->inner, effClose, 0, 0, NULL, 0.f);
         FreeLibrary(h->lib);
-        for (int c = 0; c < 8; c++) free(h->dry[c]);
+        for (int c = 0; c < MAX_CH; c++) free(h->dry[c]);
         free(h);
         return r;
     }
@@ -410,6 +456,8 @@ __declspec(dllexport) AEffect *VSTPluginMain(HostCb host) {
     if (!in || in->magic != 0x56737450 /* 'VstP' */) { if (h->lib) FreeLibrary(h->lib); free(h); return NULL; }
     in->user = &h->outer;                                /* VSX's host calls get our AEffect */
 
+    for (int c = 0; c < MAX_CH; c++)
+        if (!(h->dry[c] = (float*)calloc(MAX_BLOCK, sizeof(float)))) { for (int k = 0; k < c; k++) free(h->dry[k]); in->dispatcher(in, effClose, 0, 0, NULL, 0.f); FreeLibrary(h->lib); free(h); return NULL; }
     h->inner = in; h->step = 1.f / (FADE_SECONDS * 48000.f);
     h->outer = *in;                                      /* same channels, programs, latency, flags */
     h->outer.dispatcher = dispatch;

@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.3.0")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.3.0")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.3.1")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.3.1")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -26,13 +26,12 @@ static class Cfg
     public static readonly string AppDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VSX Deck");
     public static readonly string Plugin = Path.Combine(AppDir, "VSX Deck Holder.dll");
     public static string Data(string name) { return Path.Combine(AppDir, name); }
-    // Output device: (part of) its name, from output.txt (installer / Settings). Default: Volt 276.
+    // Output device: (part of) its name, from output.txt (installer / Settings). "" = not chosen yet.
     public static string RenderName
     {
         get
         {
-            try { var s = File.ReadAllText(Path.Combine(AppDir, "output.txt")).Trim(); if (s.Length > 0) return s; } catch (IOException) { }
-            return "MONITOR L/R";
+            try { return File.ReadAllText(Path.Combine(AppDir, "output.txt")).Trim(); } catch (IOException) { return ""; }
         }
         set { File.WriteAllText(Path.Combine(AppDir, "output.txt"), value); }
     }
@@ -289,7 +288,10 @@ sealed class Engine : IDisposable
         string capName, renName; IntPtr cf = IntPtr.Zero, rf = IntPtr.Zero;
         try
         {
+            // Never guess: "" would match the first device, which can be VB-Cable itself (audio in a loop).
+            if (Cfg.RenderName.Length == 0) throw new Exception("no output chosen: pick one in Settings");
             ren = Wasapi.Open(0, Cfg.RenderName, out renName);
+            if (renName.IndexOf("VB-Audio", StringComparison.OrdinalIgnoreCase) >= 0) throw new Exception(renName + " can't be the output: pick your interface in Settings");
             ren.GetMixFormat(out rf);
             int renRate = Marshal.ReadInt32(rf, 4);
             // No resampler: VB-Cable runs at the output's rate. Switching it (fresh install, or a DAW changed the
@@ -809,7 +811,9 @@ static class Program
     static void Main(string[] args)
     {
         // Sharp text at 125 % / 150 % display scaling: draw at the real DPI instead of being stretched by Windows.
-        try { SetProcessDpiAwarenessContext((IntPtr)(-4)); }   // per-monitor v2 (Windows 10 1703+)
+        // ponytail: system-aware, not per-monitor: sharp at the main monitor's scaling; on a monitor with another scaling
+        // Windows stretches the window (soft, but laid out right). Per-monitor would need re-layout on every DPI change.
+        try { SetProcessDpiAwarenessContext((IntPtr)(-2)); }   // DPI_AWARENESS_CONTEXT_SYSTEM_AWARE (Windows 10 1703+)
         catch (EntryPointNotFoundException) { SetProcessDPIAware(); }
         timeBeginPeriod(1);   // 1 ms sleeps for the audio loop (Windows 11 default is ~15.6 ms: too coarse, crackles)
         bool created, tray = Array.IndexOf(args, "--tray") >= 0;
@@ -821,6 +825,11 @@ static class Program
                 if (!tray && EventWaitHandle.TryOpenExisting(MainForm.ShowEvent, out show)) { AllowSetForegroundWindow(-1); show.Set(); show.Dispose(); }
                 return;
             }
+            // A surprise in a timer or click handler (a locked file, a COM hiccup) is logged and the app carries on;
+            // .NET's own dialog would offer "Quit" and take system audio with it.
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (s, e) => Log("error: " + e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (s, e) => Log("fatal: " + e.ExceptionObject);
             Application.EnableVisualStyles();
             if (System.Diagnostics.Process.GetProcessesByName("VSXSystemwide").Length > 0 &&
                 MessageBox.Show("VSX Systemwide is running. With both, system audio may go through VSX twice.\n\nQuit VSX Systemwide first (its tray icon), or start VSX Deck anyway?",
@@ -839,6 +848,6 @@ static class Program
     public static void Log(string line)
     {
         try { File.AppendAllText(Path.Combine(Cfg.AppDir, "vsxdeck.log"), DateTime.Now.ToString("s") + "  " + line + Environment.NewLine); }
-        catch (IOException) { }
+        catch (Exception) { }   // logging must never be what fails
     }
 }
