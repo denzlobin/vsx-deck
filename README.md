@@ -14,7 +14,8 @@ Switch and save **Steven Slate Audio VSX** presets from an **Elgato Stream Deck*
 
 ## Install
 
-1. Install **Slate VSX** and the **Elgato Stream Deck** app.
+1. Install **Slate VSX** and the **Elgato Stream Deck** app (6.4 or later). No Node.js needed: the Stream Deck app
+   downloads its own the first time it loads the keys, so it needs internet once.
 2. Close your DAW. Open **PowerShell** from the Start menu and run, in this folder:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\Install.ps1
@@ -27,7 +28,7 @@ Switch and save **Steven Slate Audio VSX** presets from an **Elgato Stream Deck*
    says so: press **Play through VSX** (or set CABLE Input as the default output in Sound settings).
 4. **DAW**: rescan plugins and put **VSX Deck Holder** where VSX was (in Reaper: View → Monitoring FX).
 
-Running the installer again updates everything and keeps your deck layout. Options: `-Mode full|daw`, `-Vsx <path to VSX.dll>`,
+Running the installer again updates everything and keeps your deck layout. Options: `-Mode full|daw`, `-Vsx <VSX.dll or its folder>`,
 `-VstDir <folder for the DAW plugin>`, `-DryRun` (shows what it would do, changes nothing).
 
 Don't run it from a terminal inside a Microsoft Store app: Windows would hide the files it writes from VSX Deck.
@@ -94,7 +95,7 @@ Solid lines carry audio, dotted lines carry control.
 |---|---|
 | `vsxdeckholder.c` | VSX Deck Holder: keeps one VSX running and swaps its state in place, so switching has no reload and no volume jump. |
 | `vsxdeck.cs` | VSX Deck app: system audio through VSX, VSX's window, tray, key pictures. |
-| `com.vsxdeck.sdPlugin\` | Stream Deck keys. `node plugin.js` runs its self-check. |
+| `com.vsxdeck.sdPlugin\` | Stream Deck keys (run on the Stream Deck app's own Node.js). For developers: `node plugin.js` runs its self-check. |
 | `Install.ps1`, `Uninstall.ps1` | Setup and removal. |
 | `build.ps1`, `make-icons.ps1` | Rebuild `bin\`; draw the icons and this page's picture. |
 

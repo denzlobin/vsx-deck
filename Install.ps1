@@ -1,6 +1,6 @@
 <#
   VSX Deck: one-step install. Re-running is safe (it updates in place).
-    powershell -ExecutionPolicy Bypass -File .\Install.ps1 [-Mode full|daw] [-Output "MONITOR L/R"] [-Vsx <path to VSX.dll>] [-VstDir <folder>] [-DryRun]
+    powershell -ExecutionPolicy Bypass -File .\Install.ps1 [-Mode full|daw] [-Output "<device name>"] [-Vsx <VSX.dll or its folder>] [-VstDir <folder>] [-DryRun]
 
   Needs: Slate VSX (VST2, 64-bit) and, for the keys, the Elgato Stream Deck app.
   Modes (asked if not given):
@@ -17,6 +17,7 @@ $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
 $app = Join-Path $env:LOCALAPPDATA 'VSX Deck'
 $holder = 'VSX Deck Holder.dll'
+$kitVersion = (Get-Content -LiteralPath "$kit\com.vsxdeck.sdPlugin\manifest.json" -Raw | ConvertFrom-Json).Version   # the one version number
 function Step($m) { Write-Host "`n== $m" -ForegroundColor Cyan }
 function Q($s) { "'" + ($s -replace "'", "''") + "'" }   # quote a path for a PowerShell command line
 # Runs a command elevated (UAC prompt); $false if the prompt was declined.
@@ -60,11 +61,22 @@ function Is64BitDll($path) {
         return $pe -gt 0 -and $pe + 6 -le $b.Length -and [BitConverter]::ToUInt16($b, $pe + 4) -eq 0x8664
     } catch { return $false }
 }
-function FindVsx {
-    foreach ($d in "$env:ProgramFiles\VstPlugins", "$env:ProgramFiles\Steinberg\VstPlugins", "$env:CommonProgramFiles\VST2",
-                   "$env:CommonProgramFiles\Steinberg\VST2") {
-        $p = Join-Path $d 'VSX.dll'; if (Is64BitDll $p) { return $p }
+# VSX.dll in these folders or up to two levels below them (installers often add a vendor folder).
+$vstFolders = "$env:ProgramFiles\VstPlugins", "$env:ProgramFiles\Steinberg\VstPlugins", "$env:CommonProgramFiles\VST2",
+              "$env:CommonProgramFiles\Steinberg\VST2", "$env:ProgramFiles\VST2"
+function FindVsx($folders) {
+    foreach ($d in $folders) {
+        if (-not (Test-Path -LiteralPath $d -PathType Container)) { continue }
+        $hit = Get-ChildItem -LiteralPath $d -Filter 'VSX.dll' -File -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+               Where-Object { Is64BitDll $_.FullName } | Select-Object -First 1
+        if ($hit) { return $hit.FullName }
     }
+}
+# A path the user gave: VSX.dll itself, or a folder to search.
+function VsxAt($path) {
+    $path = $path.Trim().Trim('"')
+    if (Test-Path -LiteralPath $path -PathType Leaf) { if (Is64BitDll $path) { return $path } else { return $null } }
+    FindVsx @($path)
 }
 function Ask($question) { if ($DryRun) { throw "A dry run can't ask '$question': pass -Mode / -Vsx / -VstDir instead." }; (Read-Host $question).Trim().Trim('"') }
 
@@ -79,11 +91,19 @@ if (-not $Mode) {
 $full = $Mode -eq 'full'
 if ($full -and -not (Test-Path -LiteralPath "$kit\bin\VSXDeck.exe")) { throw 'bin\VSXDeck.exe is missing: run build.ps1 first.' }
 
-if (-not $Vsx) { $Vsx = FindVsx }
-while (-not (Is64BitDll $Vsx)) {
-    if ($Vsx) { Write-Warning "Not a 64-bit VST2 plugin: $Vsx" } else { Write-Host 'VSX.dll (VST2) was not found in the usual VST folders.' }
-    $Vsx = Ask 'Full path to VSX.dll (empty = cancel)'
-    if (-not $Vsx) { throw 'Install Slate VSX (VST2, 64-bit) via Steven Slate Audio Center, then run this again.' }
+$installVsx = 'Install Slate VSX first (Steven Slate Audio Center, with the VST2 format), then run this again.'
+if ($Vsx) { $given = $Vsx; $Vsx = VsxAt $given; if (-not $Vsx) { throw "No 64-bit VSX.dll (VST2) at -Vsx $given" } }
+else {
+    $Vsx = FindVsx $vstFolders
+    # Not in the usual places: VSX may be in a VST folder of the user's own, so ask before giving up.
+    while (-not $Vsx) {
+        Write-Host 'VSX.dll (64-bit VST2) was not found in the usual VST folders.'
+        if ($DryRun) { throw "$installVsx (Or pass -Vsx with VSX's folder.)" }
+        $where = (Read-Host 'If VSX is installed, type its VST2 folder (or the path to VSX.dll). Press Enter if it is not installed').Trim().Trim('"')
+        if (-not $where) { throw $installVsx }
+        $Vsx = VsxAt $where
+        if (-not $Vsx) { Write-Warning "No 64-bit VSX.dll in $where (searched two folders deep)." }
+    }
 }
 $Vsx = [IO.Path]::GetFullPath($Vsx)
 Write-Host "VSX: $Vsx"
@@ -192,7 +212,7 @@ if (Test-Path $sdExe) {
 
     $action = { param($uuid, $name, $settings)
         [ordered]@{ ActionID = [guid]::NewGuid().ToString(); LinkedTitle = $false; Name = $name
-                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.3.3' }
+                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = $kitVersion }
                     Resources = $null; Settings = $settings; State = 0; States = @([ordered]@{ ShowTitle = $false }); UUID = $uuid } }
     $keys = [ordered]@{}   # "column,row" on a 5x3 deck
     for ($n = 1; $n -le 10; $n++) { $keys["$(($n - 1) % 5),$([Math]::Floor(($n - 1) / 5))"] = & $action 'com.vsxdeck.slot' 'VSX Preset' ([ordered]@{ slot = $n }) }
