@@ -27,7 +27,7 @@ Switch and save **Steven Slate Audio VSX** presets from an **Elgato Stream Deck*
    Sound settings for you.
 4. **DAW**: rescan plugins and put **VSX Deck Holder** where VSX was (in Reaper: View → Monitoring FX).
 
-Running the installer again updates everything. Options: `-Mode full|daw`, `-Vsx <path to VSX.dll>`,
+Running the installer again updates everything and keeps your deck layout. Options: `-Mode full|daw`, `-Vsx <path to VSX.dll>`,
 `-VstDir <folder for the DAW plugin>`, `-DryRun` (shows what it would do, changes nothing).
 
 Don't run it from a terminal inside a Microsoft Store app: Windows would hide the files it writes from VSX Deck.
@@ -36,10 +36,10 @@ Don't run it from a terminal inside a Microsoft Store app: Windows would hide th
 
 - **New preset**: press an empty preset key ("save here"), set up the room in a VSX window, then hold **Save**.
   The key shows ✓, or ⚠ if no VSX window was open.
-- **Change a preset**: select it, adjust VSX, hold **Save**. VSX Deck acts like a single source of truth that controls both versions (app and DAW) at once. 
+- **Change a preset**: select it, adjust VSX, hold **Save**. VSX Deck acts like a single source of truth that controls both versions (app and DAW) at once. Save takes the settings from the VSX window on screen; the app hidden in the tray doesn't count.
 - **Clear a preset**: hold its key 1.5 s. It moves to `%LOCALAPPDATA%\VSX Deck\cleared\`, so you can get it back.
 - **More presets**: drag **VSX Preset** onto any key. It takes the next free number.
-- **ON** goes back to the last preset. **OFF** fades to dry in 30 ms.
+- **ON** goes back to the last preset (before you've saved any, it turns VSX on as it is). **OFF** fades to dry in 30 ms.
 - **Bypass** stays on when you switch rooms and is never saved into a preset.
 - **Dashed amber outline**: nothing running VSX has confirmed the change yet (the app or your DAW is closed).
 

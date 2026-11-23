@@ -4,8 +4,9 @@
  *
  * Deck state lives in %LOCALAPPDATA%\VSX Deck\ (per user) and is polled every 50 ms:
  *   active.vsx  VSX state ("VC2!..."): applied to the live VSX. Empty = OFF: 30 ms fade to dry, VSX keeps running.
+ *               "on" = ON with VSX's current settings (no preset saved yet).
  *   bypass.txt  "1"/"0": VSX's own level-matched bypass (a flag in its state), kept across room changes.
- *   save.req    "<slot>": the instance whose window is open stores its settings as slot<N>.vsx (un-bypassed).
+ *   save.req    "<slot>": the instance whose window is on screen stores its settings as slot<N>.vsx (un-bypassed).
  * What this instance applied is reported in status.txt: "on <ROOM>\nbypass 0|1" or "off".
  *
  * The editor is VSX's own window inside a container. VSX only reads its settings when its window opens, so after
@@ -183,6 +184,11 @@ static void pollActive(Hold *h) {
     char *b = h->active.exists ? readFile(L"active.vsx", &n) : NULL;
     if (h->active.exists && !b) { h->active.known = 0; return; }   /* being written: retry next poll */
     if (isState(b, n)) apply(h, b, n);
+    else if (b && n >= 2 && !memcmp(b, "on", 2)) {      /* ON before any preset exists: VSX as it is now */
+        DWORD m = 0; char *s = liveState(h, &m);
+        if (s) { apply(h, s, m); free(s); }
+        else { InterlockedExchange(&h->wet, 1); writeStatus(NULL, 0); }
+    }
     else { InterlockedExchange(&h->wet, 0); writeStatus(NULL, 0); }
     free(b);
 }
@@ -197,8 +203,16 @@ static void pollBypass(Hold *h) {
     char *s = liveState(h, &n);
     if (s) { apply(h, s, n); free(s); }
 }
+/* Is our VSX window on screen? The VSX Deck app keeps its editor open while hidden in the tray, and Reaper keeps
+ * unselected FX editors open but hidden; only a window the user can see should answer Save. */
+static int editorShown(Hold *h) {
+    HWND c = h->container;
+    if (!h->editorOpen || !c || !IsWindowVisible(c)) return 0;
+    HWND root = GetAncestor(c, GA_ROOT);
+    return root && !IsIconic(root);
+}
 static void pollSave(Hold *h) {
-    if (!changed(L"save.req", &h->save) || !h->save.exists || !h->editorOpen) return;
+    if (!changed(L"save.req", &h->save) || !h->save.exists || !editorShown(h)) return;
     DWORD n = 0; char *b = readFile(L"save.req", &n);
     int slot = b ? atoi(b) : 0;
     free(b);

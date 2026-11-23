@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.2.11")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.2.11")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.3.0")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.3.0")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -158,7 +158,18 @@ interface IMMDevice
 {
     [PreserveSig] int Activate(ref Guid iid, int ctx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o);
     [PreserveSig] int OpenPropertyStore(int access, out IPropertyStore ps);
+    [PreserveSig] int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
 }
+// Undocumented but unchanged since Windows 7; Sound settings' "Default Format" goes through it.
+[ComImport, Guid("f8679f50-850a-41cf-9c72-430f290290c8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IPolicyConfig
+{
+    [PreserveSig] int GetMixFormat([MarshalAs(UnmanagedType.LPWStr)] string id, out IntPtr fmt);
+    [PreserveSig] int GetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id, int useDefault, out IntPtr fmt);
+    [PreserveSig] int ResetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id);
+    [PreserveSig] int SetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string id, IntPtr endpointFmt, IntPtr mixFmt);
+}
+[ComImport, Guid("870af99c-171d-4f9e-af0d-e63df40c2bc9")] class PolicyConfigClient { }
 [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IPropertyStore { int GetCount(out int n); int GetAt(int i, out PropKey k); [PreserveSig] int GetValue(ref PropKey k, out PropVariant v); }
 [StructLayout(LayoutKind.Sequential)] struct PropKey { public Guid fmtid; public int pid; }
@@ -211,6 +222,49 @@ static class Wasapi
         }
         throw new Exception((flow == 0 ? "playback" : "recording") + " device containing '" + nameContains + "' not found");
     }
+
+    // Puts both VB-Cable devices at this sample rate, as Sound settings > device > Advanced > Default Format would.
+    // True if anything changed.
+    public static bool MatchCable(int rate)
+    {
+        bool changed = false;
+        var pc = (IPolicyConfig)new PolicyConfigClient();
+        try
+        {
+            foreach (var side in new[] { Tuple.Create(0, "CABLE Input"), Tuple.Create(1, Cfg.CaptureName) })
+            {
+                var dev = Devices(side.Item1).FirstOrDefault(t => t.Item1.IndexOf(side.Item2, StringComparison.OrdinalIgnoreCase) >= 0);
+                if (dev == null) continue;
+                string id; IntPtr mix, fmt;
+                if (dev.Item2.GetId(out id) != 0 || pc.GetMixFormat(id, out mix) != 0) continue;
+                bool same = Marshal.ReadInt32(mix, 4) == rate;
+                if (!same && pc.GetDeviceFormat(id, 0, out fmt) == 0)
+                {
+                    IntPtr newFmt = WithRate(fmt, rate), newMix = WithRate(mix, rate);
+                    int hr = pc.SetDeviceFormat(id, newFmt, newMix);
+                    Marshal.FreeCoTaskMem(newFmt); Marshal.FreeCoTaskMem(newMix); Marshal.FreeCoTaskMem(fmt);
+                    if (hr != 0)
+                    {
+                        Marshal.FreeCoTaskMem(mix);
+                        throw new Exception(string.Format("couldn't switch {0} to {1:0.#} kHz (0x{2:X8}): set CABLE Input and CABLE Output to {1:0.#} kHz in Sound settings",
+                            dev.Item1, rate / 1000.0, hr));
+                    }
+                    changed = true;
+                }
+                Marshal.FreeCoTaskMem(mix);
+            }
+        }
+        finally { Marshal.ReleaseComObject(pc); }
+        return changed;
+    }
+    static IntPtr WithRate(IntPtr fmt, int rate)   // copy of a WAVEFORMATEX(TENSIBLE) at another sample rate
+    {
+        int size = 18 + Marshal.ReadInt16(fmt, 16);
+        var b = new byte[size]; Marshal.Copy(fmt, b, 0, size);
+        BitConverter.GetBytes(rate).CopyTo(b, 4);                                   // nSamplesPerSec
+        BitConverter.GetBytes(rate * BitConverter.ToInt16(b, 12)).CopyTo(b, 8);     // nAvgBytesPerSec = rate * nBlockAlign
+        IntPtr p = Marshal.AllocCoTaskMem(size); Marshal.Copy(b, 0, p, size); return p;
+    }
 }
 
 // ---------------------------------------------------------------- audio engine
@@ -232,26 +286,41 @@ sealed class Engine : IDisposable
 
     public Engine(Func<int, Vst> vstFor)
     {
-        string capName, renName;
-        cap = Wasapi.Open(1, Cfg.CaptureName, out capName);
-        ren = Wasapi.Open(0, Cfg.RenderName, out renName);
-        IntPtr cf, rf; cap.GetMixFormat(out cf); ren.GetMixFormat(out rf);
-        rate = Marshal.ReadInt32(cf, 4); capCh = Marshal.ReadInt16(cf, 2); renCh = Marshal.ReadInt16(rf, 2);
-        int renRate = Marshal.ReadInt32(rf, 4);
-        // ponytail: no resampler; both devices must share a rate (set VB-Cable to the interface's rate in Sound settings).
-        if (renRate != rate) throw new Exception(string.Format("sample rates differ: {0} {1} Hz vs {2} {3} Hz", capName, rate, renName, renRate));
-        int ms = Cfg.LatencyMs;
-        target = rate * ms / 1000;                                                   // audio kept queued at the output
-        Check(cap.Initialize(0, 0, 200000, 0, cf, IntPtr.Zero), "capture init");     // 20 ms, mix format = float32
-        Check(ren.Initialize(0, 0, (2 * ms + 10) * 10000L, 0, rf, IntPtr.Zero), "render init");
-        ren.GetBufferSize(out renSize);
-        Guid ic = typeof(IAudioCaptureClient).GUID, ir = typeof(IAudioRenderClient).GUID; object o;
-        cap.GetService(ref ic, out o); capC = (IAudioCaptureClient)o;
-        ren.GetService(ref ir, out o); renC = (IAudioRenderClient)o;
-        vst = vstFor(rate);   // on the UI thread: VSX's window and state calls belong to it
-        Info = string.Format("{0}   →   VSX   →   {1}   ·   {2:0.#} kHz   ·   {3} ms", capName, renName, rate / 1000.0, ms);
-        thread = new Thread(Loop) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "audio" };
-        thread.Start();
+        string capName, renName; IntPtr cf = IntPtr.Zero, rf = IntPtr.Zero;
+        try
+        {
+            ren = Wasapi.Open(0, Cfg.RenderName, out renName);
+            ren.GetMixFormat(out rf);
+            int renRate = Marshal.ReadInt32(rf, 4);
+            // No resampler: VB-Cable runs at the output's rate. Switching it (fresh install, or a DAW changed the
+            // interface's rate) restarts its streams, so connect on the next try.
+            if (Wasapi.MatchCable(renRate)) throw new Exception(string.Format("VB-Cable switched to {0:0.#} kHz to match {1}", renRate / 1000.0, renName));
+            cap = Wasapi.Open(1, Cfg.CaptureName, out capName);
+            cap.GetMixFormat(out cf);
+            rate = Marshal.ReadInt32(cf, 4); capCh = Marshal.ReadInt16(cf, 2); renCh = Marshal.ReadInt16(rf, 2);
+            if (renRate != rate)
+                throw new Exception(string.Format("{0} runs at {1:0.#} kHz, {2} at {3:0.#} kHz: set CABLE Input and CABLE Output to {3:0.#} kHz in Sound settings",
+                    capName, rate / 1000.0, renName, renRate / 1000.0));
+            int ms = Cfg.LatencyMs;
+            target = rate * ms / 1000;                                                   // audio kept queued at the output
+            Check(cap.Initialize(0, 0, 200000, 0, cf, IntPtr.Zero), "capture init");     // 20 ms, mix format = float32
+            Check(ren.Initialize(0, 0, (2 * ms + 10) * 10000L, 0, rf, IntPtr.Zero), "render init");
+            ren.GetBufferSize(out renSize);
+            Guid ic = typeof(IAudioCaptureClient).GUID, ir = typeof(IAudioRenderClient).GUID; object o;
+            cap.GetService(ref ic, out o); capC = (IAudioCaptureClient)o;
+            ren.GetService(ref ir, out o); renC = (IAudioRenderClient)o;
+            vst = vstFor(rate);   // on the UI thread: VSX's window and state calls belong to it
+            Info = string.Format("{0}   →   VSX   →   {1}   ·   {2:0.#} kHz   ·   {3} ms", capName, renName, rate / 1000.0, ms);
+            thread = new Thread(Loop) { IsBackground = true, Priority = ThreadPriority.Highest, Name = "audio" };
+            thread.Start();
+        }
+        catch
+        {
+            // While waiting for a device this runs every 2 s: don't leave audio clients behind.
+            foreach (object c in new object[] { capC, renC, cap, ren }) if (c != null) Marshal.ReleaseComObject(c);
+            throw;
+        }
+        finally { if (cf != IntPtr.Zero) Marshal.FreeCoTaskMem(cf); if (rf != IntPtr.Zero) Marshal.FreeCoTaskMem(rf); }
     }
     static void Check(int hr, string what) { if (hr != 0) throw new Exception(what + " failed 0x" + hr.ToString("X8")); }
     // In the loop: any failure (e.g. 0x88890004, device unplugged or switched off) stops it; the window reconnects.
@@ -384,8 +453,10 @@ sealed class MainForm : Form
         Tool(tools, 2, "\uEB51", "Support development (Ko-fi)", () => AboutForm.Open(AboutForm.SupportUrl));
         header.Controls.Add(info); header.Controls.Add(tools);
         Controls.Add(editor); Controls.Add(header);
-        engine = new Engine(VstFor);
-        SetInfo(engine.Info, false);
+        // VSX first, audio second: with the output device off or unplugged the window still opens, says
+        // "Waiting for audio" and connects when the device appears (the idle timer retries every 2 s).
+        vst = new Vst(Cfg.Plugin, 48000);
+        RestartAudio();
         var size = vst.EditorSize();
         ClientSize = new Size(size.Width, size.Height + header.Height);
         vst.SizeWindow = (w, h) => BeginInvoke((Action)(() => ClientSize = new Size(w, h + header.Height)));
@@ -754,16 +825,13 @@ static class Program
             if (System.Diagnostics.Process.GetProcessesByName("VSXSystemwide").Length > 0 &&
                 MessageBox.Show("VSX Systemwide is running. With both, system audio may go through VSX twice.\n\nQuit VSX Systemwide first (its tray icon), or start VSX Deck anyway?",
                     "VSX Deck", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
-            // Started at login, devices or files may not be ready yet: retry quietly for ~30 s before complaining.
-            for (int attempt = 1; ; attempt++)
+            // Audio devices that aren't there yet are handled by the window ("Waiting for audio"); this only
+            // catches VSX itself failing to load.
+            try { Application.Run(new MainForm(tray)); }
+            catch (Exception ex)
             {
-                try { Application.Run(new MainForm(tray)); return; }
-                catch (Exception ex)
-                {
-                    Log(string.Format("attempt {0}: {1} (plugin file present: {2})", attempt, ex.Message, File.Exists(Cfg.Plugin)));
-                    if (!tray || attempt >= 6) { MessageBox.Show(ex.Message, "VSX Deck", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-                    Thread.Sleep(5000);
-                }
+                Log(string.Format("start failed: {0} (plugin file present: {1})", ex.Message, File.Exists(Cfg.Plugin)));
+                MessageBox.Show(ex.Message, "VSX Deck", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
     }

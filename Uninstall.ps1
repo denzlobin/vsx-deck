@@ -61,7 +61,7 @@ if ($Part -eq 'all') {
     if ($sd -and -not $DryRun) { $sd | Stop-Process; Start-Sleep 2 }   # it would write the profile back
     Remove (Join-Path $env:APPDATA 'Elgato\StreamDeck\Plugins\com.vsxdeck.sdPlugin')
     Get-ChildItem (Join-Path $env:APPDATA 'Elgato\StreamDeck\ProfilesV3') -Filter manifest.json -Recurse -Depth 1 -ErrorAction SilentlyContinue |
-        Where-Object { $_.Directory.Name -like '*.sdProfile' -and (Get-Content -LiteralPath $_.FullName -Raw) -match '"Name":"VSX Deck"' } |
+        Where-Object { $_.Directory.Name -like '*.sdProfile' -and $(try { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).Name -eq 'VSX Deck' } catch { $false }) } |
         ForEach-Object { Remove $_.DirectoryName }
     if ($sdExe -and -not $DryRun) { Start-Process $sdExe }
 

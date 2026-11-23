@@ -108,6 +108,10 @@ if ($DryRun) {
     return
 }
 
+# Files from a downloaded zip carry Windows' "came from the internet" mark, and copies keep it: SmartScreen would then
+# stop the unsigned VSXDeck.exe ("Windows protected your PC").
+Get-ChildItem -LiteralPath $kit -Recurse -File | Unblock-File
+
 if ($full) {
     Step 'VB-Cable (virtual default output)'
     if (HasCable) { Write-Host 'Installed.' }
@@ -173,7 +177,7 @@ if (Test-Path $sdExe) {
 
     $action = { param($uuid, $name, $settings)
         [ordered]@{ ActionID = [guid]::NewGuid().ToString(); LinkedTitle = $false; Name = $name
-                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.2.11' }
+                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.3.0' }
                     Resources = $null; Settings = $settings; State = 0; States = @([ordered]@{ ShowTitle = $false }); UUID = $uuid } }
     $keys = [ordered]@{}   # "column,row" on a 5x3 deck
     for ($n = 1; $n -le 10; $n++) { $keys["$(($n - 1) % 5),$([Math]::Floor(($n - 1) / 5))"] = & $action 'com.vsxdeck.slot' 'VSX Preset' ([ordered]@{ slot = $n }) }
@@ -185,11 +189,11 @@ if (Test-Path $sdExe) {
 
     $root = Join-Path $env:APPDATA 'Elgato\StreamDeck\ProfilesV3'
     $mans = @(Get-ChildItem $root -Filter manifest.json -Recurse -Depth 1 -ErrorAction SilentlyContinue)
-    $mine = $mans | Where-Object { (Get-Content $_.FullName -Raw) -match '"Name":"VSX Deck"' } | Select-Object -First 1
+    $mine = $mans | Where-Object { try { (Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json).Name -eq 'VSX Deck' } catch { $false } } | Select-Object -First 1
     $utf8 = New-Object Text.UTF8Encoding $false
     $pageDir = $null
-    if ($mine) {
-        $pageDir = Join-Path $mine.DirectoryName ('Profiles\' + (Get-Content $mine.FullName -Raw | ConvertFrom-Json).Pages.Current.ToUpper())
+    if ($mine) {   # an update must not undo the user's own key layout
+        Write-Host 'Kept your "VSX Deck" profile as it is. (Delete it in the Stream Deck app and run this again for the default layout.)'
     } elseif ($mans) {
         $device = (Get-Content $mans[0].FullName -Raw | ConvertFrom-Json).Device
         $profId = [guid]::NewGuid().ToString().ToUpper(); $pageId = [guid]::NewGuid().ToString().ToLower()

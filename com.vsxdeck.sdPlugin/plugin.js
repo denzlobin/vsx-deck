@@ -20,7 +20,8 @@ const mtime = (n) => { try { return fs.statSync(f(n)).mtimeMs; } catch { return 
 // ---- state ------------------------------------------------------------------------------------
 const isChunk = (b) => !!(b && b.length > 8 && b.toString('latin1', 0, 4) === 'VC2!');
 const roomOf = (b) => (isChunk(b) && (b.toString('utf8').match(/m_currentStudioName="([^"]*)"/) || [])[1]) || '';
-function wanted() { return isChunk(read('active.vsx')); }
+const ON_AS_IS = Buffer.from('on');   // active.vsx "on": ON with VSX's current settings (no preset saved yet)
+function wanted() { const a = read('active.vsx'); return isChunk(a) || (!!a && a.equals(ON_AS_IS)); }
 function lastSlot() { return parseInt((read('lastslot.txt') || '1').toString(), 10) || 1; }
 function applied() { // { on, room, bypass } as reported by the live instance, or null if it never reported
   const s = read('status.txt'); if (!s) return null;
@@ -35,7 +36,8 @@ function writeActive(buf) {
   fs.renameSync(tmp, f('active.vsx'));               // atomic replace: the plugin never sees half a file
 }
 function toggle() {
-  writeActive(wanted() ? null : read(`slot${lastSlot()}.vsx`) || read('slot1.vsx'));
+  const preset = [read(`slot${lastSlot()}.vsx`), read('slot1.vsx')].find(isChunk);
+  writeActive(wanted() ? null : preset || ON_AS_IS);
 }
 function selectSlot(n) {                             // an empty slot only becomes the Save target; audio stays
   const preset = read(`slot${n}.vsx`);
@@ -274,6 +276,8 @@ function selfTest() {
   delete require.cache[require.resolve(__filename)];
   const m = require(__filename);
   const chunk = (room) => Buffer.from(`VC2!\0\0\0\0<VSXver1 m_currentStudioName="${room}"/>`);
+  m.toggle(); assert.strictEqual(fs.readFileSync(path.join(dir, 'active.vsx'), 'utf8'), 'on', 'no presets yet: ON = VSX as it is');
+  assert.strictEqual(m.wanted(), true, '"on" counts as on'); m.toggle(); assert.strictEqual(m.wanted(), false, 'and toggles off');
   fs.writeFileSync(path.join(dir, 'slot1.vsx'), chunk('HUMAN LINEAR'));
   fs.writeFileSync(path.join(dir, 'slot4.vsx'), chunk('CELLPHONE'));
   assert.strictEqual(m.wanted(), false, 'no active.vsx = off');
