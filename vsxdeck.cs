@@ -388,6 +388,9 @@ sealed class Engine : IDisposable
             // start (often 10 ms = one output period) and every late cable packet cracked.
             bool playing = false, primed = false; uint lastPad = 0;
             long prev = System.Diagnostics.Stopwatch.GetTimestamp(), lastProc = 0;
+            // Backlog trim: what stayed in the fifo for a whole second after feeding the output is pure extra delay
+            // (left by a late burst from the cable, or VB-Cable's clock running faster). Cut it with a crossfade.
+            int minFifo = int.MaxValue; long window = prev;
             while (run)
             {
                 Thread.Sleep(1);                                               // ~1 ms with timeBeginPeriod(1), see Program
@@ -435,7 +438,17 @@ sealed class Engine : IDisposable
                     pad += B; playing = true;
                 }
                 lastPad = pad;
-                if (fifoN > rate / 5 * 2)                                      // >200 ms backlog (clock drift): keep the newest
+                if (primed && playing) minFifo = Math.Min(minFifo, fifoN / 2); else minFifo = int.MaxValue;
+                if (now - window > System.Diagnostics.Stopwatch.Frequency)
+                {
+                    int extra = minFifo == int.MaxValue ? 0 : minFifo - rate / 1000;   // keep 1 ms of margin
+                    bool cut = extra > rate / 200;                                     // over 5 ms: worth cutting
+                    if (cut && Splice(fifo, ref fifoN, extra))
+                        Events.Enqueue(string.Format("trim: {0:0.0} ms of backlog removed", extra * 1000.0 / rate));
+                    else if (cut) continue;                                            // fifo short right now: retry next pass
+                    minFifo = int.MaxValue; window = now;
+                }
+                if (fifoN > rate / 5 * 2)                                     // >200 ms backlog (clock drift): keep the newest
                 {
                     int keep = target * 2;
                     Buffer.BlockCopy(fifo, (fifoN - keep) * 4, fifo, 0, keep * 4); fifoN = keep; Resync++;
@@ -443,6 +456,24 @@ sealed class Engine : IDisposable
             }
         }
         catch (Exception ex) { Error = ex.Message; }
+    }
+    // Drops the next n stereo frames of an interleaved fifo without a click: the first X frames that would have
+    // played fade out while the frames after the cut fade in (a tape splice). False if the fifo is too short.
+    internal static bool Splice(float[] fifo, ref int fifoN, int n)
+    {
+        const int X = 128;   // ~2.7 ms at 48 kHz
+        if (n <= 0 || fifoN / 2 < n + X) return false;
+        for (int i = 0; i < X; i++)
+        {
+            float g = (i + 0.5f) / X;
+            for (int c = 0; c < 2; c++)
+            {
+                int a = i * 2 + c, b = (n + i) * 2 + c;
+                fifo[b] = fifo[a] * (1 - g) + fifo[b] * g;
+            }
+        }
+        Buffer.BlockCopy(fifo, n * 2 * 4, fifo, 0, (fifoN - n * 2) * 4); fifoN -= n * 2;
+        return true;
     }
     static unsafe float ReadF(IntPtr p, int i) { return ((float*)p)[i]; }
     static unsafe void WriteF(IntPtr p, int i, float v) { ((float*)p)[i] = v; }
