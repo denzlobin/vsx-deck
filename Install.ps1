@@ -150,7 +150,11 @@ if ($full) {
         $sig = Get-AuthenticodeSignature "$dl\x\VBCABLE_Setup_x64.exe"
         if ($sig.Status -ne 'Valid') { throw 'VB-Cable installer signature is not valid; not running it.' }
         $signer = $sig.SignerCertificate.Subject
-        if ($signer -notmatch 'VB-Audio|Vincent Burel' -and (Read-Host "The VB-Cable installer is signed by: $signer`nRun it anyway? [y/N]") -notmatch '^[yY]') {
+        # VB-Audio signs as its owner, e.g. "CN=BUREL VINCENT Entrepreneur individuel, O=..." (Pack46): accept a
+        # common name with both names in either order, or VB-Audio; anything else is the user's call.
+        $cn = if ($signer -match '(?:^|,\s*)CN=([^,]+)') { $Matches[1] } else { '' }
+        $known = $cn -match 'VB-Audio' -or ($cn -match '\bBurel\b' -and $cn -match '\bVincent\b')
+        if (-not $known -and (Read-Host "The VB-Cable installer is signed by: $signer`nRun it anyway? [y/N]") -notmatch '^[yY]') {
             throw "Not running it. Install VB-Cable from $page, then run this again."
         }
         Start-Process "$dl\x\VBCABLE_Setup_x64.exe" -ArgumentList '-i', '-h' -WorkingDirectory "$dl\x" -Verb RunAs -Wait
