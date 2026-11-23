@@ -411,6 +411,7 @@ static intptr_t dispatch(AEffect *e, int32_t op, int32_t idx, intptr_t v, void *
     case effEditClose: return closeEditor(h);
     case effSetSampleRate: if (o > 0) h->step = 1.f / (FADE_SECONDS * o); break;
     case effClose: {
+        if (h->container) closeEditor(h);                /* a host that skipped effEditClose: our window must not outlive us */
         SetEvent(h->stop);
         /* the watcher may be inside SendMessage to this very thread: keep serving sent messages */
         while (MsgWaitForMultipleObjects(1, &h->thread, FALSE, INFINITE, QS_SENDMESSAGE) == WAIT_OBJECT_0 + 1) {
