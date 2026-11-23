@@ -150,3 +150,5 @@ Stream Deck is a trademark of Elgato (Corsair). VSX Deck is not affiliated with 
 
 MIT, see [LICENSE](LICENSE). Covers this kit's code and artwork only. VSX, VB-Cable, Reaper and Stream Deck belong to
 their owners.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/M4M5KXQ5P)
