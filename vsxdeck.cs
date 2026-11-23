@@ -15,8 +15,8 @@ using System.Windows.Forms;
 [assembly: System.Reflection.AssemblyTitle("VSX Deck")]
 [assembly: System.Reflection.AssemblyProduct("VSX Deck")]
 [assembly: System.Reflection.AssemblyDescription("Slate VSX for system audio, controlled from the Stream Deck")]
-[assembly: System.Reflection.AssemblyVersion("0.2.10")]                 // kit version: keep in step with manifest.json and Install.ps1
-[assembly: System.Reflection.AssemblyInformationalVersion("0.2.10")]   // "Product version" as shown (file version stays 4-part)
+[assembly: System.Reflection.AssemblyVersion("0.2.11")]                 // kit version: keep in step with manifest.json and Install.ps1
+[assembly: System.Reflection.AssemblyInformationalVersion("0.2.11")]   // "Product version" as shown (file version stays 4-part)
 
 static class Cfg
 {
@@ -356,21 +356,11 @@ sealed class MainForm : Form
     public static int U(int pixels) { return (int)Math.Round(pixels * 96f / Dpi); }   // pixels -> 100 % units
     public static readonly Color Charcoal = Color.FromArgb(0x17, 0x18, 0x1c), Muted = Color.FromArgb(0xa7, 0xa8, 0xae),
         Key = Color.FromArgb(0x2b, 0x2c, 0x31), Light = Color.FromArgb(0xec, 0xea, 0xe6), Warn = Color.FromArgb(0xff, 0x8a, 0x7a);
-    readonly Panel header = new Panel { Dock = DockStyle.Top, Height = S(30), BackColor = Charcoal };
+    readonly Panel header = new Panel { Dock = DockStyle.Top, Height = S(34), BackColor = Charcoal };
     readonly Label info = new Label
     {
         Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(S(12), 0, 0, 0),
         ForeColor = Muted, Font = new Font("Segoe UI", 9f), AutoEllipsis = true
-    };
-    readonly Button gear = new Button
-    {
-        Dock = DockStyle.Right, Width = S(40), Text = "", Font = new Font("Segoe MDL2 Assets", 11f),
-        FlatStyle = FlatStyle.Flat, ForeColor = Muted, Cursor = Cursors.Hand, TabStop = false
-    };
-    readonly Button about = new Button
-    {
-        Dock = DockStyle.Right, Width = S(40), Text = "", Font = new Font("Segoe MDL2 Assets", 11f),
-        FlatStyle = FlatStyle.Flat, ForeColor = Muted, Cursor = Cursors.Hand, TabStop = false
     };
     string infoText = ""; int shownGlitches;
     int retryAt = -1;   // audio failed (device off/unplugged): reconnect when due
@@ -387,13 +377,12 @@ sealed class MainForm : Form
         Font = new Font("Segoe UI", 9f); BackColor = Charcoal;
         HandleCreated += (s, e) => { int on = 1; DwmSetWindowAttribute(Handle, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, ref on, 4); };
         editor.Dock = DockStyle.Fill;
-        gear.FlatAppearance.BorderSize = 0; gear.FlatAppearance.MouseOverBackColor = Key;
-        gear.Click += (s, e) => OpenSettings();
-        new ToolTip().SetToolTip(gear, "Settings");
-        about.FlatAppearance.BorderSize = 0; about.FlatAppearance.MouseOverBackColor = Key;
-        about.Click += (s, e) => OpenAbout();
-        new ToolTip().SetToolTip(about, "About VSX Deck");
-        header.Controls.Add(info); header.Controls.Add(about); header.Controls.Add(gear);   // last added docks rightmost
+        // Settings, About, Support at the right, as in S-1 Utility: small bordered buttons, glyphs from Segoe MDL2.
+        var tools = new Panel { Dock = DockStyle.Right, Width = S(3 * 32 + 2 * 4 + 8), BackColor = Charcoal };
+        Tool(tools, 0, "\uE713", "Settings", OpenSettings);
+        Tool(tools, 1, "\uE946", "About VSX Deck", OpenAbout);
+        Tool(tools, 2, "\uEB51", "Support development (Ko-fi)", () => AboutForm.Open(AboutForm.SupportUrl));
+        header.Controls.Add(info); header.Controls.Add(tools);
         Controls.Add(editor); Controls.Add(header);
         engine = new Engine(VstFor);
         SetInfo(engine.Info, false);
@@ -427,6 +416,37 @@ sealed class MainForm : Form
         tray.DoubleClick += (s, e) => ShowWindow();
         if (startHidden) { WindowState = FormWindowState.Minimized; ShowInTaskbar = false; Load += (s, e) => Hide(); }
         HandleCreated += (s, e) => ListenForShow();   // BeginInvoke needs the window handle
+    }
+    static void Tool(Panel bar, int i, string glyph, string tip, Action click)   // 32 x 26, 4 apart, centred in the header
+    {
+        var b = new Button
+        {
+            Font = new Font("Segoe MDL2 Assets", 9f), FlatStyle = FlatStyle.Flat, TabStop = false, Cursor = Cursors.Hand,
+            ForeColor = Color.FromArgb(0xcc, 0xcc, 0xd2), BackColor = Color.FromArgb(0x1f, 0x20, 0x24),
+            Bounds = new Rectangle(S(i * 36), S(4), S(32), S(26))
+        };
+        b.FlatAppearance.BorderColor = Color.FromArgb(0x3d, 0x40, 0x49);
+        b.FlatAppearance.MouseOverBackColor = Key; b.FlatAppearance.MouseDownBackColor = Charcoal;
+        // Drawn as a shape centred on its ink: as button text the icon font's line metrics push glyphs off centre.
+        b.Paint += (s, e) =>
+        {
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath())
+            using (var brush = new SolidBrush(b.ForeColor))
+            {
+                path.AddString(glyph, b.Font.FontFamily, (int)FontStyle.Regular, b.Font.SizeInPoints * Dpi / 72f, Point.Empty, StringFormat.GenericTypographic);
+                RectangleF r = path.GetBounds();
+                using (var m = new System.Drawing.Drawing2D.Matrix())
+                {
+                    m.Translate((float)Math.Round((b.Width - r.Width) / 2f - r.X), (float)Math.Round((b.Height - r.Height) / 2f - r.Y));
+                    path.Transform(m);
+                }
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                e.Graphics.FillPath(brush, path);
+            }
+        };
+        b.Click += (s, e) => click();
+        new ToolTip().SetToolTip(b, tip);
+        bar.Controls.Add(b);
     }
     // One VSX instance for the app's lifetime: a new audio connection only re-rates it (no reload, no burst).
     Vst VstFor(int rate) { if (vst == null) vst = new Vst(Cfg.Plugin, rate); else vst.SetRate(rate); return vst; }
@@ -668,7 +688,8 @@ sealed class SettingsForm : Form
 // ---------------------------------------------------------------- About / Support
 sealed class AboutForm : Form
 {
-    const string RepoUrl = "https://github.com/denzlobin/vsx-deck", SupportUrl = "https://ko-fi.com/dzl0";
+    const string RepoUrl = "https://github.com/denzlobin/vsx-deck";
+    public const string SupportUrl = "https://ko-fi.com/dzl0";
     const int W = 400;
     int y = 28;
 
@@ -691,14 +712,12 @@ sealed class AboutForm : Form
         repo.LinkClicked += (s, e) => Open(RepoUrl);
         Controls.Add(repo); y += 34;
         Line("Licensed under MIT", new Font("Segoe UI", 8.25f), MainForm.Muted, 8);
-        Line("Not affiliated with or endorsed by Slate Digital or Steven Slate Audio.\nVSX is their product; you need your own licensed copy.",
-            new Font("Segoe UI", 8.25f), Color.FromArgb(0x77, 0x78, 0x7e), 20, 34);
+        Line("Not affiliated with or endorsed by Slate Digital or Steven Slate Audio.\nVSX is their product; you need your own licensed copy.\n" +
+             "VSX is used only through the standard VST2 plugin interface;\nno VSX code was decompiled or modified. Don't run with VSX Systemwide.",
+            new Font("Segoe UI", 8.25f), Color.FromArgb(0x77, 0x78, 0x7e), 20, 66);
 
-        var support = SettingsForm.Btn("\u2665  Support on Ko-fi", (s, e) => Open(SupportUrl));
-        var close = SettingsForm.Btn("Close", (s, e) => Close());
-        support.Location = new Point(16, y); close.Location = new Point(W - 16 - MainForm.U(close.PreferredSize.Width), y);
-        Controls.Add(support); Controls.Add(close); CancelButton = close;
-        ClientSize = new Size(W, y + MainForm.U(close.Height) + 16);
+        KeyPreview = true; KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };   // no buttons: Esc or the title bar closes it
+        ClientSize = new Size(W, y + 8);   // the last line's gap + 8 = the 28 at the top
         SettingsForm.ToDpi(this);
     }
     void Line(string text, Font font, Color color, int gap, int height = 0)   // one centred line (or two with \n)
@@ -707,7 +726,7 @@ sealed class AboutForm : Form
         Controls.Add(new Label { Text = text, Font = font, ForeColor = color, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, Bounds = new Rectangle(0, y, W, h) });
         y += h + gap;
     }
-    static void Open(string url) { try { System.Diagnostics.Process.Start(url); } catch (Exception) { } }
+    public static void Open(string url) { try { System.Diagnostics.Process.Start(url); } catch (Exception) { } }
 }
 
 static class Program

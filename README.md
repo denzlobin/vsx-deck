@@ -2,100 +2,128 @@
 
 ![VSX Deck](assets/thumbnail.png)
 
-Control **Slate VSX** headphone correction from an **Elgato Stream Deck**, for all system audio and in your DAW:
+Switch and save **Steven Slate Audio VSX** presets from an **Elgato Stream Deck**, in your DAW or system-wide.
 
-- **VSX ON/OFF**: green = on (with the room name), grey = off. One key, showing what the live VSX actually does.
-- **VSX Preset keys** (10 to start, up to 99): switch rooms instantly; the active one is green and shows the room's picture.
-- **Save**: hold for 1 s (a bar fills) to store what you dialed in the VSX window into the selected preset. A tap does nothing.
-- **Bypass**: VSX's own level-matched bypass, for A/B.
-- **VSX Deck** tray app: VSX's own window with live meters, following the deck.
+- **ON/OFF**: turns VSX on or off. Lights green and shows the current room name when on. Expect a volume jump on switching off.
+- **Preset keys** (up to 99): switch rooms instantly. The active one is green and shows the room's picture.
+- **Save**: hold 1 s to store the current VSX settings in the selected preset slot.
+- **Bypass**: VSX's own level-matched bypass.
+- **VSX Deck app** (system-wide install): Opens the software window or brings it to front.
 
-```
-apps ─► Windows default output "CABLE Input" (VB-Cable) ─► VSX Deck [VSX Deck Holder ─► VSX] ─► your interface
-DAW  ─► Monitoring FX: VSX Deck Holder ─► VSX
-deck ─► %LOCALAPPDATA%\VSX Deck\ ─► every VSX Deck Holder applies it to its running VSX (no reload, no volume burst)
-```
+> **Use VSX Deck or VSX Systemwide, not both.** Both programs send system audio through VSX, so you get double processing and latency if you run both.
 
 ## Install
 
-1. Install **Slate VSX** (its VST2, `C:\Program Files\VstPlugins\VSX.dll`, is used) and the **Elgato Stream Deck** app.
-2. Run, from this folder, in a normal PowerShell window (Start menu). Not from a terminal inside a packaged
-   (Microsoft Store/MSIX) app: Windows would redirect its files in `%LOCALAPPDATA%` to that app's private copy,
-   where VSX Deck and the Stream Deck can't see them.
+1. Install **Slate VSX** and the **Elgato Stream Deck** app.
+2. Close your DAW. Open **PowerShell** from the Start menu and run, in this folder:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\Install.ps1
    ```
-   It offers to install **VB-Cable** (admin prompt) and asks which output to play to. It then installs the
-   **VSX Deck** app (starts at login, in the tray), offers **VSX Deck Holder** for your DAW (admin prompt; close
-   the DAW first when updating it), and adds the Stream Deck plugin with a **VSX Deck** profile. Re-running is safe.
-3. Set Windows' default **output** to **CABLE Input (VB-Audio Virtual Cable)**. The installer opens Sound settings.
-4. DAW (optional): rescan VST plugins and put **VSX Deck Holder** where VSX was, e.g. Reaper's
-   View → Monitoring FX. Monitoring over ASIO bypasses VB-Cable, so DAW audio is never processed twice.
+   Choose what to install:
+   - **System-wide**: all Windows audio goes through VSX. Installs VB-Cable, the VSX Deck app, the DAW
+     plugin and the Stream Deck keys.
+   - **DAW only**: the DAW plugin and the Stream Deck keys, doesn't touch Windows audio.
+3. **System-wide**: set the Windows default output to **CABLE Input (VB-Audio Virtual Cable)**. The installer opens
+   Sound settings for you.
+4. **DAW**: rescan plugins and put **VSX Deck Holder** where VSX was (in Reaper: View → Monitoring FX).
 
-Profile layout (5×3 deck): rows 1–2 = presets 1–10; bottom row = Bypass, App (left), Save, VSX ON/OFF (right).
-**App** opens VSX Deck: starts it if it isn't running, otherwise brings its window to the front.
-**More presets**: drag **VSX Preset** (VSX Deck category) onto any key. It takes the next number (highest in use + 1)
-and starts empty, ready for Save.
+Running the installer again updates everything. Options: `-Mode full|daw`, `-Vsx <path to VSX.dll>`,
+`-VstDir <folder for the DAW plugin>`, `-DryRun` (shows what it would do, changes nothing).
+
+Don't run it from a terminal inside a Microsoft Store app: Windows would hide the files it writes from VSX Deck.
 
 ## Use
 
-- **Switch rooms** with the preset keys. Everything running VSX Deck Holder follows: the VSX Deck app and your DAW.
-- **New preset**: press an empty preset key (blue outline, "save here"; audio stays as is), dial the room in a VSX
-  window, hold **Save**. The key flashes ✓ (⚠ if no VSX window is open).
-  **Update one**: select it, tweak, hold **Save**. If two VSX windows are open (app and DAW), close the one you aren't
-  tweaking; the last to save wins.
-- **Clear a preset**: hold its key for 1.5 s (a red bar fills). Recoverable: it moves to `%LOCALAPPDATA%\VSX Deck\cleared\`
-  (copy it back as `slotN.vsx`). Preset keys act on release, so a short press still selects.
-- **ON** returns to the last preset used (preset 1 if that one is empty). OFF is a 30 ms fade to dry; VSX keeps running.
-- **Bypass** stays on across room switches and is never saved into a preset.
-- **Amber dashed outline** on ON/OFF or Bypass = not confirmed by a running VSX (the VSX Deck app isn't running).
-- **Tray icon**: Show VSX / Settings… / About… / Exit. Closing the window only hides it.
-- **About** (ⓘ in the header): version, license, repo link, and a Ko-fi link if you'd like to support the project.
-- Latency of the system-audio path: about 30 ms (Settings: 20 / 30 / 50). Fine for music and video, noticeable in games.
-- **Dropouts** in the header (e.g. "dropouts 3") count moments the output ran dry since the audio connection
-  started; details go to `vsxdeck.log`. If you hear crackles and the number climbs, raise **Latency** in Settings.
+- **New preset**: press an empty preset key ("save here"), set up the room in a VSX window, then hold **Save**.
+  The key shows ✓, or ⚠ if no VSX window was open.
+- **Change a preset**: select it, adjust VSX, hold **Save**. VSX Deck acts like a single source of truth that controls both versions (app and DAW) at once. 
+- **Clear a preset**: hold its key 1.5 s. It moves to `%LOCALAPPDATA%\VSX Deck\cleared\`, so you can get it back.
+- **More presets**: drag **VSX Preset** onto any key. It takes the next free number.
+- **ON** goes back to the last preset. **OFF** fades to dry in 30 ms.
+- **Bypass** stays on when you switch rooms and is never saved into a preset.
+- **Dashed amber outline**: nothing running VSX has confirmed the change yet (the app or your DAW is closed).
 
-### Settings (gear in the header, or tray → Settings…)
+Deck layout: presets 1–10 on the top two rows; Bypass, App, Save and ON/OFF on the bottom row.
 
-- **Output** device and **Latency** (20 / 30 / 50 ms). Changing either reconnects the audio; VSX stays loaded.
-- **Start at login** (in the tray).
-- **Room pictures on preset keys** on/off, and **Redraw pictures**.
-- **Presets**: open the presets folder (`slotN.vsx` files; copy them to back up or move presets to another PC).
+### VSX Deck app
 
-### Room pictures on preset keys
-
-When the VSX Deck window is visible and settles on a preset, it saves a small thumbnail of the room picture VSX is
-showing (`slotN.png`, `slotN-active.png` in `%LOCALAPPDATA%\VSX Deck`). They are made on your PC from **your own
-licensed VSX, for your own deck**. The artwork is Slate's: this repository contains none, and don't share the
-generated files.
-
-## How it works
-
-| File | What |
-|---|---|
-| `vsxdeckholder.c` | **VSX Deck Holder**: VST2 plugin wrapping VSX. Keeps one instance alive and applies the deck state to it (`effSetChunk`); OFF = fade to dry; bypass = flag in VSX's state; answers Save; reports `status.txt`. Its editor reopens VSX's window behind a snapshot after each change (VSX only reads its state when the window opens). |
-| `vsxdeck.cs` | **VSX Deck** app: VB-Cable → VSX Deck Holder → output (WASAPI), VSX window, tray, key pictures. |
-| `com.vsxdeck.sdPlugin\` | Stream Deck keys (Node 20, no packages). `node plugin.js` runs its self-check. |
-| `Install.ps1`, `build.ps1` | Setup; rebuild `bin\` (needs Visual Studio C++ Build Tools for the plugin). |
-| `make-icons.ps1` | Draws the app/tray icon (`assets\vsxdeck.ico`), Stream Deck icons and the repo thumbnail. Original artwork. |
-| `bin\` | Ready-built `VSXDeck.exe` and `VSX Deck Holder.dll`. |
-
-Everything lives in one per-user folder, `%LOCALAPPDATA%\VSX Deck`: the app, `output.txt`, `settings.ini`, and the deck state
-`slotN.vsx` (VSX state), `active.vsx` (empty = OFF), `lastslot.txt`, `bypass.txt`, `save.req`, `status.txt`.
-Only your account can write it, so no other user can feed settings to your VSX.
+- Header buttons: ⚙ Settings, ⓘ About, ♥ Support. Closing the window hides it to the tray.
+- **Settings**: output device, latency (20 / 30 / 50 ms), start at login, take room pictures on keys, open the presets folder.
+- **Dropouts** in the header counts audio gaps. If you hear crackles and it climbs, raise the latency.
+  Clicks when a player starts, stops or skips usually come from the player itself.
+- **Room pictures**: taken from your own VSX window, on your PC, for your own deck. They are Slate's artwork:
+  don't share them. This repository contains none.
 
 ## Remove
 
-Close your DAW, then:
+Close your DAW, then run:
 
-    powershell -ExecutionPolicy Bypass -File .\Uninstall.ps1 [-Part all|app] [-Presets keep|delete] [-DryRun]
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Uninstall.ps1
+```
 
-`all` removes the app, VSX Deck Holder, the Stream Deck plugin and "VSX Deck" profile, and the deck state (your presets
-stay unless you say otherwise). `app` removes only the system-wide part and keeps the DAW plugin and keys. VB-Cable stays
-installed; remove it in Settings > Apps if nothing else uses it, and set the default output back to your interface.
+Choose everything, or only the system-wide part. Your presets are kept unless you say otherwise. VB-Cable stays
+installed; remove it in Settings → Apps if nothing else needs it, and set your default output back.
+
+## How it works
+
+VSX Deck is a small **VST host**. **VSX Deck Holder** is a VST2 plugin that runs VSX inside it and applies the deck's
+choices to it. The **VSX Deck app** runs VSX Deck Holder and plays system audio through it, similar to how VSX Systemwide software works.
+
+```mermaid
+flowchart LR
+    apps["Windows apps"] --> cable["VB-Cable<br/>(default output)"]
+    subgraph app["VSX Deck app (system-wide)"]
+        holderA["VSX Deck Holder"] --> vsxA["VSX"]
+    end
+    cable --> holderA
+    subgraph daw["Your DAW (Monitoring FX)"]
+        holderB["VSX Deck Holder"] --> vsxB["VSX"]
+    end
+    vsxA --> out["Audio interface"]
+    vsxB --> out
+    deck["Stream Deck"] -. "preset, ON/OFF, Bypass" .-> state[("Deck state<br/>%LOCALAPPDATA%\VSX Deck")]
+    state -. "applied in place" .-> holderA
+    state -. "applied in place" .-> holderB
+```
+
+Solid lines carry audio, dotted lines carry control.
+
+| File | What |
+|---|---|
+| `vsxdeckholder.c` | VSX Deck Holder: keeps one VSX running and swaps its state in place, so switching has no reload and no volume jump. |
+| `vsxdeck.cs` | VSX Deck app: system audio through VSX, VSX's window, tray, key pictures. |
+| `com.vsxdeck.sdPlugin\` | Stream Deck keys. `node plugin.js` runs its self-check. |
+| `Install.ps1`, `Uninstall.ps1` | Setup and removal. |
+| `build.ps1`, `make-icons.ps1` | Rebuild `bin\`; draw the icons and this page's picture. |
+
+Presets and settings live in `%LOCALAPPDATA%\VSX Deck`, which only your Windows account can change.
+
+### Why VST2 only
+
+- VST2 is a small C interface, so VSX Deck Holder is one short C file with no SDK. Its state calls let it switch
+  rooms instantly without reloading VSX.
+- VST3 would need a much bigger C++ host built on Steinberg's SDK, for no gain here.
+- If Slate drops the VST2 version of VSX, this kit stops working.
+
+## Disclaimers
+
+- **Independent project**, not affiliated with or endorsed by Slate Digital or Steven Slate Audio. You need your own
+  licensed VSX.
+- **May become obsolete.** VSX has no way to switch rooms from an external controller. Whenever Slate adds one, this software loses its reason to exist, and you are encouraged to switch to the official solution.
+- **No reverse engineering.** VSX is used only through the standard VST2 plugin interface and the settings VSX saves
+  itself. No VSX code was decompiled, disassembled or modified.
+- **Low-level code generated with AI.** This software is made with Claude Code. The system-wide part is a VST host that works directly with Windows audio and the VST2 interface. The author tested it on three separate Windows machines before making the repository public and encountered no issues. Still, use it at your own risk. It is recommended to initially test it at low volume levels.
+
+## Feedback and scope
+
+VSX Deck is built to support one person's workflow, and that workflow shapes how it develops.
+
+- **Bug reports** are welcome: open an issue.
+- **Feature requests** are considered only if they fit the author's workflow.
+- **Want something different?** You're welcome to fork it and make it your own; the MIT license allows that.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Covers this kit's code and artwork only. VSX, VB-Cable, Reaper and Stream Deck are
-their owners' products under their own licenses; VSX Deck is an independent project, not affiliated with or
-endorsed by Slate Digital or Steven Slate Audio.
+MIT, see [LICENSE](LICENSE). Covers this kit's code and artwork only. VSX, VB-Cable, Reaper and Stream Deck belong to
+their owners.

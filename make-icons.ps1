@@ -108,8 +108,8 @@ $title = New-Object Drawing.Font 'Segoe UI Semibold', 104, ([Drawing.FontStyle]:
 $sub = New-Object Drawing.Font 'Segoe UI', 36, ([Drawing.FontStyle]::Regular), ([Drawing.GraphicsUnit]::Pixel)
 $fine = New-Object Drawing.Font 'Segoe UI', 20, ([Drawing.FontStyle]::Regular), ([Drawing.GraphicsUnit]::Pixel)
 $g.DrawString('VSX Deck', $title, (New-Object Drawing.SolidBrush $light), 560, 200)
-$g.DrawString("Headphone correction presets,`none key away on your Stream Deck.", $sub, (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(0xd9, 0xd6, 0xcf))), 566, 330)
-$g.DrawString('Not affiliated with Steven Slate Audio. VSX is a trademark of its owner.', $fine, (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(0x9a, 0x98, 0x8f))), 120, 580)
+$g.DrawString("Switch and Save VSX Presets`nfrom your Stream Deck", $sub, (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(0xd9, 0xd6, 0xcf))), 566, 330)
+$g.DrawString('Not affiliated with or endorsed by Slate Digital or Steven Slate Audio. VSX is a trademark of its owner.', $fine, (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(0x9a, 0x98, 0x8f))), 120, 580)
 Save $c[0] $g (Join-Path $assets 'thumbnail.png')
 
 Get-ChildItem $assets, $sdp -Include *.png, *.ico -Recurse | Select-Object Name, Length
