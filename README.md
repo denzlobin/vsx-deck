@@ -86,9 +86,13 @@ Only your account can write it, so no other user can feed settings to your VSX.
 
 ## Remove
 
-Tray → Exit. Remove VSX Deck Holder from your DAW and delete `C:\Program Files\VstPlugins\VSX Deck Holder.dll`.
-Delete `%LOCALAPPDATA%\VSX Deck` and `shell:startup\VSX Deck.lnk`; remove the VSX Deck profile and plugin in the
-Stream Deck app. Uninstall VB-Cable (Apps) and set the default output back to your interface.
+Close your DAW, then:
+
+    powershell -ExecutionPolicy Bypass -File .\Uninstall.ps1 [-Part all|app] [-Presets keep|delete] [-DryRun]
+
+`all` removes the app, VSX Deck Holder, the Stream Deck plugin and "VSX Deck" profile, and the deck state (your presets
+stay unless you say otherwise). `app` removes only the system-wide part and keeps the DAW plugin and keys. VB-Cable stays
+installed; remove it in Settings > Apps if nothing else uses it, and set the default output back to your interface.
 
 ## License
 

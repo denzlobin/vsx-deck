@@ -1,22 +1,29 @@
 <#
   VSX Deck: one-step install. Re-running is safe (it updates in place).
-    powershell -ExecutionPolicy Bypass -File .\Install.ps1 [-Output "MONITOR L/R"]
+    powershell -ExecutionPolicy Bypass -File .\Install.ps1 [-Mode full|daw] [-Output "MONITOR L/R"] [-Vsx <path to VSX.dll>] [-VstDir <folder>] [-DryRun]
 
-  Needs: Slate VSX (VST2: C:\Program Files\VstPlugins\VSX.dll) and the Elgato Stream Deck app.
-  Sets up:
-    - VB-Cable (asks first; admin prompt)             Windows -> VB-Cable -> VSX Deck -> your interface
-    - VSX Deck app, VSX Deck Holder, deck state       %LOCALAPPDATA%\VSX Deck (per user; starts at login, in the tray)
-    - VSX Deck Holder VST2 for DAWs (asks; admin)     C:\Program Files\VstPlugins\VSX Deck Holder.dll
-    - Stream Deck plugin + "VSX Deck" profile         presets 1-10, Bypass, Save, VSX ON/OFF
+  Needs: Slate VSX (VST2, 64-bit) and, for the keys, the Elgato Stream Deck app.
+  Modes (asked if not given):
+    full  System-wide: all Windows audio goes through VSX, plus the DAW plugin.
+            - VB-Cable (asks first; admin prompt)         Windows -> VB-Cable -> VSX Deck -> your interface
+            - VSX Deck app                                %LOCALAPPDATA%\VSX Deck (per user; starts at login, in the tray)
+            - VSX Deck Holder for DAWs (asks)             -VstDir, default: the folder VSX.dll is in
+    daw   DAW only: VSX Deck Holder for your DAW and the deck keys. No VB-Cable, no app, Windows audio untouched.
+  Both: Stream Deck plugin + "VSX Deck" profile, deck state in %LOCALAPPDATA%\VSX Deck.
+  -DryRun checks everything and prints what it would do, without changing anything.
 #>
-param([string]$Output)
+param([ValidateSet('full', 'daw')][string]$Mode, [string]$Output, [string]$Vsx, [string]$VstDir, [switch]$DryRun)
 $ErrorActionPreference = 'Stop'
 $kit = $PSScriptRoot
 $app = Join-Path $env:LOCALAPPDATA 'VSX Deck'
-$vsx = Join-Path $env:ProgramFiles 'VstPlugins\VSX.dll'
 $holder = 'VSX Deck Holder.dll'
 function Step($m) { Write-Host "`n== $m" -ForegroundColor Cyan }
-function Admin($command) { Start-Process powershell -ArgumentList '-NoProfile', '-Command', $command -Verb RunAs -Wait -WindowStyle Hidden }
+function Q($s) { "'" + ($s -replace "'", "''") + "'" }   # quote a path for a PowerShell command line
+# Runs a command elevated (UAC prompt); $false if the prompt was declined.
+function Admin($command) {
+    try { Start-Process powershell -ArgumentList '-NoProfile', '-Command', $command -Verb RunAs -Wait -WindowStyle Hidden; $true }
+    catch { Write-Warning 'Administrator prompt declined.'; $false }
+}
 
 Add-Type -TypeDefinition @'
 using System; using System.Collections.Generic; using System.Runtime.InteropServices;
@@ -44,51 +51,118 @@ public static class AudioDevices {
 '@
 function HasCable { [bool]([AudioDevices]::Names(1) | Where-Object { $_ -like '*CABLE Output*' }) }
 
+# A 64-bit DLL (PE machine 0x8664)? VSX Deck is 64-bit and can only load 64-bit VSX.
+function Is64BitDll($path) {
+    if (-not $path -or [IO.Path]::GetExtension($path) -ne '.dll' -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    try {
+        $b = [IO.File]::ReadAllBytes($path); if ($b.Length -lt 0x40) { return $false }
+        $pe = [BitConverter]::ToInt32($b, 0x3C)
+        return $pe -gt 0 -and $pe + 6 -le $b.Length -and [BitConverter]::ToUInt16($b, $pe + 4) -eq 0x8664
+    } catch { return $false }
+}
+function FindVsx {
+    foreach ($d in "$env:ProgramFiles\VstPlugins", "$env:ProgramFiles\Steinberg\VstPlugins", "$env:CommonProgramFiles\VST2",
+                   "$env:CommonProgramFiles\Steinberg\VST2") {
+        $p = Join-Path $d 'VSX.dll'; if (Is64BitDll $p) { return $p }
+    }
+}
+function Ask($question) { if ($DryRun) { throw "A dry run can't ask '$question': pass -Mode / -Vsx / -VstDir instead." }; (Read-Host $question).Trim().Trim('"') }
+
 Step 'Checking prerequisites'
-if (-not (Test-Path $vsx)) { throw "Slate VSX (VST2) not found at $vsx. Install VSX via Steven Slate Audio Center, then run this again." }
-if (-not (Test-Path "$kit\bin\VSXDeck.exe")) { throw 'bin\ is missing: run build.ps1 first (or copy the whole folder).' }
+if (-not (Test-Path -LiteralPath "$kit\bin\$holder")) { throw 'bin\ is missing: run build.ps1 first (or copy the whole folder).' }
+if (-not $Mode) {
+    Write-Host 'What to install?'
+    Write-Host '  1) System-wide: all Windows audio through VSX (VB-Cable + VSX Deck app), plus the DAW plugin'
+    Write-Host '  2) DAW only: VSX Deck Holder for your DAW + the deck keys; Windows audio untouched'
+    $Mode = if ((Ask 'Number [1]') -eq '2') { 'daw' } else { 'full' }
+}
+$full = $Mode -eq 'full'
+if ($full -and -not (Test-Path -LiteralPath "$kit\bin\VSXDeck.exe")) { throw 'bin\VSXDeck.exe is missing: run build.ps1 first.' }
+
+if (-not $Vsx) { $Vsx = FindVsx }
+while (-not (Is64BitDll $Vsx)) {
+    if ($Vsx) { Write-Warning "Not a 64-bit VST2 plugin: $Vsx" } else { Write-Host 'VSX.dll (VST2) was not found in the usual VST folders.' }
+    $Vsx = Ask 'Full path to VSX.dll (empty = cancel)'
+    if (-not $Vsx) { throw 'Install Slate VSX (VST2, 64-bit) via Steven Slate Audio Center, then run this again.' }
+}
+$Vsx = [IO.Path]::GetFullPath($Vsx)
+Write-Host "VSX: $Vsx"
+
+# Where the DAW plugin goes: a folder your DAW scans. Default = beside VSX.dll, which the DAW already scans.
+if (-not $VstDir) { $VstDir = Split-Path $Vsx }
+try { $VstDir = [IO.Path]::GetFullPath($VstDir.Trim().Trim('"')) } catch { throw "Not a valid folder path: $VstDir" }
+if (-not [IO.Path]::IsPathRooted($VstDir) -or $VstDir -match '^\\\\') { throw "Use a local folder with a drive letter for -VstDir: $VstDir" }
+if (Test-Path -LiteralPath $VstDir -PathType Leaf) { throw "-VstDir is a file, not a folder: $VstDir" }
+foreach ($own in $app, $kit) { if (($VstDir.TrimEnd('\') + '\').StartsWith($own.TrimEnd('\') + '\', 'OrdinalIgnoreCase')) { throw "-VstDir can't be inside $own (pick the folder your DAW scans for VST2 plugins)." } }
+$vst = Join-Path $VstDir $holder
+Write-Host "DAW plugin folder: $VstDir$(if (-not (Test-Path -LiteralPath $VstDir)) { ' (will be created)' })"
+
 $sdExe = Join-Path $env:ProgramFiles 'Elgato\StreamDeck\StreamDeck.exe'
 if (-not (Test-Path $sdExe)) { Write-Warning 'Stream Deck app not found: deck keys will be skipped.' }
 
-Step 'VB-Cable (virtual default output)'
-if (HasCable) { Write-Host 'Installed.' }
-else {
-    if ((Read-Host 'VB-Cable is not installed. Download it from vb-audio.com and install now? (admin prompt) [Y/n]') -match '^[nN]') { throw 'VB-Cable is required: https://vb-audio.com/Cable/' }
-    $dl = Join-Path $env:TEMP 'vbcable'; New-Item -ItemType Directory -Force $dl | Out-Null
-    Invoke-WebRequest 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' -OutFile "$dl\pack.zip" -UseBasicParsing
-    Expand-Archive "$dl\pack.zip" "$dl\x" -Force
-    if ((Get-AuthenticodeSignature "$dl\x\VBCABLE_Setup_x64.exe").Status -ne 'Valid') { throw 'VB-Cable installer signature is not valid; not running it.' }
-    Start-Process "$dl\x\VBCABLE_Setup_x64.exe" -ArgumentList '-i', '-h' -WorkingDirectory "$dl\x" -Verb RunAs -Wait
-    Start-Sleep 3
-    if (-not (HasCable)) { throw 'VB-Cable did not appear; a restart may be needed. Run this again afterwards.' }
+if ($DryRun) {
+    Write-Host "`nDry run, nothing changed. Would install ($Mode):"
+    if ($full) { Write-Host "  VB-Cable: $(if (HasCable) { 'installed' } else { 'download and install (asks first)' })"; Write-Host "  VSX Deck app -> $app" }
+    Write-Host "  VSX Deck Holder -> $vst"
+    if (Test-Path $sdExe) { Write-Host '  Stream Deck plugin + "VSX Deck" profile' }
+    return
 }
 
-Step "VSX Deck app in $app"
-Get-Process VSXDeck -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1
+if ($full) {
+    Step 'VB-Cable (virtual default output)'
+    if (HasCable) { Write-Host 'Installed.' }
+    else {
+        if ((Read-Host 'VB-Cable is not installed. Download it from vb-audio.com and install now? (admin prompt) [Y/n]') -match '^[nN]') { throw 'VB-Cable is required: https://vb-audio.com/Cable/' }
+        $dl = Join-Path $env:TEMP 'vbcable'; New-Item -ItemType Directory -Force $dl | Out-Null
+        Invoke-WebRequest 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip' -OutFile "$dl\pack.zip" -UseBasicParsing
+        Expand-Archive "$dl\pack.zip" "$dl\x" -Force
+        if ((Get-AuthenticodeSignature "$dl\x\VBCABLE_Setup_x64.exe").Status -ne 'Valid') { throw 'VB-Cable installer signature is not valid; not running it.' }
+        Start-Process "$dl\x\VBCABLE_Setup_x64.exe" -ArgumentList '-i', '-h' -WorkingDirectory "$dl\x" -Verb RunAs -Wait
+        Start-Sleep 3
+        if (-not (HasCable)) { throw 'VB-Cable did not appear; a restart may be needed. Run this again afterwards.' }
+    }
+}
+
+Step "Deck state in $app"
 New-Item -ItemType Directory -Force $app | Out-Null
-Copy-Item "$kit\bin\*" $app -Force
-$outFile = Join-Path $app 'output.txt'
-if ($Output) { Set-Content $outFile $Output -NoNewline }
-elseif (-not (Test-Path $outFile)) {
-    $outs = @([AudioDevices]::Names(0) | Where-Object { $_ -notlike '*VB-Audio*' })
-    Write-Host 'Where should VSX Deck play (your headphone interface)?'
-    for ($i = 0; $i -lt $outs.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $outs[$i]) }
-    $pick = Read-Host 'Number [1]'
-    $name = $outs[$(if ($pick) { [int]$pick - 1 } else { 0 })]
-    Set-Content $outFile ($name -replace ' \(.*\)$', '') -NoNewline   # match by name without the "(driver)" suffix
-}
-Write-Host "Output: $(Get-Content $outFile)"
-$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'VSX Deck.lnk'))
-$lnk.TargetPath = "$app\VSXDeck.exe"; $lnk.Arguments = '--tray'; $lnk.Save()
-Write-Host 'Starts at login (in the tray).'
+[IO.File]::WriteAllText((Join-Path $app 'vsx.txt'), $Vsx, (New-Object Text.UTF8Encoding $false))   # the Holder loads VSX from here
+Write-Host 'Done.'
 
-Step 'VSX Deck Holder for DAWs (Reaper)'
-$vst = Join-Path $env:ProgramFiles "VstPlugins\$holder"
-if ((Test-Path $vst) -and (Get-FileHash $vst).Hash -eq (Get-FileHash "$kit\bin\$holder").Hash) { Write-Host 'Up to date.' }
-elseif ((Read-Host "Install VSX Deck Holder (VST2) to $vst? (admin prompt) [Y/n]") -notmatch '^[nN]') {
-    Admin "Copy-Item '$kit\bin\$holder' '$vst' -Force"
-    if (Test-Path $vst) { Write-Host 'Installed. In Reaper: Preferences > Plug-ins > VST > Re-scan, then add "VSX Deck Holder" to View > Monitoring FX.' }
+if ($full) {
+    Step "VSX Deck app in $app"
+    Get-Process VSXDeck -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1
+    Copy-Item "$kit\bin\*" $app -Force
+    $outFile = Join-Path $app 'output.txt'
+    if ($Output) { Set-Content $outFile $Output -NoNewline }
+    elseif (-not (Test-Path $outFile)) {
+        $outs = @([AudioDevices]::Names(0) | Where-Object { $_ -notlike '*VB-Audio*' })
+        Write-Host 'Where should VSX Deck play (your headphone interface)?'
+        for ($i = 0; $i -lt $outs.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $outs[$i]) }
+        $pick = Read-Host 'Number [1]'
+        $name = $outs[$(if ($pick) { [int]$pick - 1 } else { 0 })]
+        Set-Content $outFile ($name -replace ' \(.*\)$', '') -NoNewline   # match by name without the "(driver)" suffix
+    }
+    Write-Host "Output: $(Get-Content $outFile)"
+    $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'VSX Deck.lnk'))
+    $lnk.TargetPath = "$app\VSXDeck.exe"; $lnk.Arguments = '--tray'; $lnk.Save()
+    Write-Host 'Starts at login (in the tray).'
 }
+
+Step "VSX Deck Holder for DAWs in $VstDir"
+$same = { (Test-Path -LiteralPath $vst) -and (Get-FileHash -LiteralPath $vst).Hash -eq (Get-FileHash -LiteralPath "$kit\bin\$holder").Hash }
+if (& $same) { Write-Host 'Up to date.' }
+elseif (-not $full -or (Read-Host "Install VSX Deck Holder (VST2) to $VstDir? [Y/n]") -notmatch '^[nN]') {
+    # Plain copy if the folder is yours; Program Files and the like need an administrator prompt.
+    try { New-Item -ItemType Directory -Force -Path $VstDir | Out-Null; Copy-Item -LiteralPath "$kit\bin\$holder" -Destination $vst -Force }
+    catch {
+        Admin "New-Item -ItemType Directory -Force -Path $(Q $VstDir) | Out-Null; Copy-Item -LiteralPath $(Q "$kit\bin\$holder") -Destination $(Q $vst) -Force" | Out-Null
+    }
+    if (& $same) { Write-Host "Installed. In your DAW, rescan VST plugins (Reaper: Preferences > Plug-ins > VST > Re-scan), then put VSX Deck Holder where VSX was (Reaper: View > Monitoring FX)." }
+    elseif (Test-Path -LiteralPath $vst) { Write-Warning "Could not replace $vst. Close your DAW (it may have the plugin loaded) and run this again." }
+    else { Write-Warning "VSX Deck Holder was not installed to $VstDir." }
+}
+if (Test-Path -LiteralPath $vst) { [IO.File]::WriteAllText((Join-Path $app 'holder.txt'), $vst, (New-Object Text.UTF8Encoding $false)) }   # for Uninstall.ps1
+if (-not $full -and (Test-Path -LiteralPath "$app\VSXDeck.exe")) { Write-Warning 'The system-wide part (VSX Deck app) is still installed. To remove it: Uninstall.ps1 -Part app' }
 
 if (Test-Path $sdExe) {
     Step 'Stream Deck plugin and "VSX Deck" profile'
@@ -99,12 +173,12 @@ if (Test-Path $sdExe) {
 
     $action = { param($uuid, $name, $settings)
         [ordered]@{ ActionID = [guid]::NewGuid().ToString(); LinkedTitle = $false; Name = $name
-                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.2.9' }
+                    Plugin = [ordered]@{ Name = 'VSX Deck'; UUID = 'com.vsxdeck'; Version = '0.2.10' }
                     Resources = $null; Settings = $settings; State = 0; States = @([ordered]@{ ShowTitle = $false }); UUID = $uuid } }
     $keys = [ordered]@{}   # "column,row" on a 5x3 deck
     for ($n = 1; $n -le 10; $n++) { $keys["$(($n - 1) % 5),$([Math]::Floor(($n - 1) / 5))"] = & $action 'com.vsxdeck.slot' 'VSX Preset' ([ordered]@{ slot = $n }) }
     $keys['0,2'] = & $action 'com.vsxdeck.bypass' 'VSX Bypass' ([ordered]@{})
-    $keys['1,2'] = & $action 'com.vsxdeck.app' 'VSX Deck App' ([ordered]@{})
+    if ($full) { $keys['1,2'] = & $action 'com.vsxdeck.app' 'VSX Deck App' ([ordered]@{}) }
     $keys['3,2'] = & $action 'com.vsxdeck.save' 'VSX Save' ([ordered]@{})
     $keys['4,2'] = & $action 'com.vsxdeck.onoff' 'VSX On/Off' ([ordered]@{})
     $page = [ordered]@{ Controllers = @([ordered]@{ Actions = $keys; Type = 'Keypad' }); Icon = ''; Name = '' }
@@ -127,11 +201,15 @@ if (Test-Path $sdExe) {
     if ($pageDir) {
         New-Item -ItemType Directory -Force (Join-Path $pageDir 'Images') | Out-Null
         [IO.File]::WriteAllText((Join-Path $pageDir 'manifest.json'), ($page | ConvertTo-Json -Depth 10 -Compress), $utf8)
-        Write-Host 'Rows 1-2: presets 1-10. Bottom: Bypass, App (left), Save, VSX ON/OFF (right).'
+        Write-Host "Rows 1-2: presets 1-10. Bottom: Bypass$(if ($full) { ', App' }) (left), Save, VSX ON/OFF (right)."
     }
     Start-Process $sdExe
 }
 
+if (-not $full) {
+    Write-Host "`nDone. The deck keys control VSX Deck Holder in your DAW; ON/OFF and Bypass show a dashed outline while the DAW isn't running."
+    return
+}
 Step 'Starting VSX Deck'
 Start-Process "$app\VSXDeck.exe"
 Write-Host @"

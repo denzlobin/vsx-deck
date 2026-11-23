@@ -20,7 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define VSX_DLL L"C:\\Program Files\\VstPlugins\\VSX.dll"
+#define VSX_DLL L"C:\\Program Files\\VstPlugins\\VSX.dll"   /* default; vsx.txt overrides */
 #define FADE_SECONDS 0.03f
 #define POLL_MS 50
 #define MAX_STATE (1 << 20)   /* largest deck file we read */
@@ -83,6 +83,10 @@ static intptr_t vsx(Hold *h, int32_t op, int32_t idx, intptr_t v, void *p, float
 static intptr_t innerHost(AEffect *e, int32_t op, int32_t idx, intptr_t v, void *p, float o) {
     AEffect *outer = (e && e->user) ? (AEffect*)e->user : g_creating;   /* hand the host our AEffect, not VSX's */
     if (op == 1 /* audioMasterVersion */ && !outer) return 2400;
+    if (op == 15 /* audioMasterSizeWindow */ && outer) {   /* VSX resized itself (e.g. display scaling): our window must follow */
+        Hold *h = (Hold*)outer;                              /* outer is Hold's first member */
+        if (h->container) SetWindowPos(h->container, NULL, 0, 0, idx, (int)v, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     return g_host ? g_host(outer, op, idx, v, p, o) : 0;
 }
 
@@ -92,6 +96,19 @@ static void dataPath(wchar_t *buf, const wchar_t *name) {   /* per-user: only th
     if (!n || n > MAX_PATH - 64) { buf[0] = 0; return; }       /* unusable: every file operation then just fails */
     wcscat_s(buf, MAX_PATH, L"\\VSX Deck\\");
     wcscat_s(buf, MAX_PATH, name);
+}
+/* Where VSX is: the path Install.ps1 wrote to vsx.txt (UTF-8), else the usual VST2 folder. */
+static void vsxPath(wchar_t *out) {
+    wchar_t p[MAX_PATH], w[MAX_PATH]; char b[MAX_PATH * 3]; DWORD n = 0;
+    wcscpy_s(out, MAX_PATH, VSX_DLL);
+    dataPath(p, L"vsx.txt");
+    HANDLE f = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return;
+    ReadFile(f, b, sizeof b - 1, &n, NULL); CloseHandle(f);
+    while (n && (b[n - 1] == '\r' || b[n - 1] == '\n' || b[n - 1] == ' ')) n--;
+    b[n] = 0;
+    int k = MultiByteToWideChar(CP_UTF8, 0, b, -1, w, MAX_PATH);   /* k counts the terminator */
+    if (k > 5 && _wcsicmp(w + k - 5, L".dll") == 0 && GetFileAttributesW(w) != INVALID_FILE_ATTRIBUTES) wcscpy_s(out, MAX_PATH, w);
 }
 static int changed(const wchar_t *name, Seen *s) {   /* created, deleted or rewritten since last call? */
     wchar_t p[MAX_PATH]; WIN32_FILE_ATTRIBUTE_DATA a;
@@ -370,7 +387,8 @@ __declspec(dllexport) AEffect *VSTPluginMain(HostCb host) {
     }
     Hold *h = (Hold*)calloc(1, sizeof(Hold));
     if (!h) return NULL;
-    h->lib = LoadLibraryExW(VSX_DLL, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    wchar_t vsx[MAX_PATH]; vsxPath(vsx);
+    h->lib = LoadLibraryExW(vsx, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     PluginMain pm = h->lib ? (PluginMain)GetProcAddress(h->lib, "VSTPluginMain") : NULL;
     g_creating = &h->outer;
     AEffect *in = pm ? pm(innerHost) : NULL;
